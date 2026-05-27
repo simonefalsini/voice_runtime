@@ -1,6 +1,7 @@
 # Ignore cloned repositories
 WebRTC/
 abseil-cpp/
+ggml/
 
 # Ignore build directories
 build_*/
