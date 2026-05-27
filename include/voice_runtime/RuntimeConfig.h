@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <string>
 #include "AudioTypes.h"
@@ -8,22 +9,101 @@
 namespace voice_runtime {
 
 struct RuntimeConfig {
-    AudioFormat audioFormat;
+    // -----------------------------------------------------------------------
+    // Formati audio
+    // -----------------------------------------------------------------------
 
-    std::size_t audioPoolBuffers = 512;
-    std::size_t micQueueCapacity = 64;
-    std::size_t ttsReferenceQueueCapacity = 64;
-    std::size_t speakerQueueCapacity = 64;
-    std::size_t cleanAudioQueueCapacity = 64;
+    // Formato nativo del microfono (es. 48kHz stereo Float32)
+    AudioFormat micRawFormat;
 
-    std::size_t sttTextQueueCapacity = 256;
-    std::size_t llmTextQueueCapacity = 256;
+    // Formato interno della pipeline (default: 16kHz mono Int16)
+    AudioFormat pipelineFormat;
 
-    QueueOverflowPolicy audioOverflowPolicy = QueueOverflowPolicy::BlockProducer;
-    QueueOverflowPolicy textOverflowPolicy = QueueOverflowPolicy::DropOldest;
+    // Formato richiesto dall'STT (se diverso da pipelineFormat viene inserito un adapter)
+    AudioFormat sttInputFormat;
 
-    std::size_t llmMemoryWindowBytes = 256 * 1024;
-    std::string llmDiskSpoolPath = "voice_runtime_llm_input.log";
+    // Formato richiesto dal DSP/AEC (se diverso da pipelineFormat viene inserito un adapter)
+    AudioFormat dspInputFormat;
+
+    // -----------------------------------------------------------------------
+    // Pool e code — audio
+    // -----------------------------------------------------------------------
+
+    std::size_t audioPoolBuffers             = 512;
+    std::size_t micRawQueueCapacity          = 64;   // raw mic → adapter
+    std::size_t micQueueCapacity             = 128;  // adapted mic → VAD
+    std::size_t vadGatedQueueCapacity        = 128;  // VAD → AEC
+    std::size_t ttsReferenceQueueCapacity    = 128;
+    std::size_t speakerQueueCapacity         = 128;
+    std::size_t cleanAudioQueueCapacity      = 128;
+    std::size_t sttAdaptedQueueCapacity      = 64;   // AEC → STT adapter → STT
+
+    // -----------------------------------------------------------------------
+    // Code — testo ed eventi
+    // -----------------------------------------------------------------------
+
+    std::size_t sttTextQueueCapacity         = 512;
+    std::size_t llmTextQueueCapacity         = 256;
+    std::size_t vadEventQueueCapacity        = 64;
+    std::size_t bargeInEventQueueCapacity    = 16;
+
+    // -----------------------------------------------------------------------
+    // Politiche di overflow
+    // -----------------------------------------------------------------------
+
+    QueueOverflowPolicy audioOverflowPolicy  = QueueOverflowPolicy::DropOldest;
+    QueueOverflowPolicy textOverflowPolicy   = QueueOverflowPolicy::DropOldest;
+
+    // -----------------------------------------------------------------------
+    // LLM persistence
+    // -----------------------------------------------------------------------
+
+    std::size_t llmMemoryWindowBytes         = 256 * 1024;
+    std::string llmDiskSpoolPath             = "voice_runtime_llm_input.log";
+
+    // -----------------------------------------------------------------------
+    // VAD
+    // -----------------------------------------------------------------------
+
+    bool  enableVad                          = true;
+    float vadSpeechThreshold                 = 0.5f;
+
+    // -----------------------------------------------------------------------
+    // Barge-in
+    // -----------------------------------------------------------------------
+
+    bool  enableBargeIn                      = true;
+
+    // -----------------------------------------------------------------------
+    // Adapter — inseriti automaticamente se i formati differiscono
+    // -----------------------------------------------------------------------
+
+    bool  enableMicAdapter                   = true;
+    bool  enableSttAdapter                   = true;
+
+    // -----------------------------------------------------------------------
+    // Metriche periodiche
+    // -----------------------------------------------------------------------
+
+    std::chrono::milliseconds metricsIntervalMs{1000};
+    bool  printMetrics                       = true;
+
+    // -----------------------------------------------------------------------
+    // Costruttore — imposta default coerenti
+    // -----------------------------------------------------------------------
+
+    RuntimeConfig() {
+        // Pipeline interna: 16kHz mono Int16, frame 10ms
+        pipelineFormat.sampleRate   = 16000;
+        pipelineFormat.channels     = 1;
+        pipelineFormat.frameMs      = 10;
+        pipelineFormat.sampleFormat = SampleFormat::Int16;
+
+        // Per default il mic ha lo stesso formato della pipeline
+        micRawFormat  = pipelineFormat;
+        sttInputFormat = pipelineFormat;
+        dspInputFormat = pipelineFormat;
+    }
 };
 
 } // namespace voice_runtime

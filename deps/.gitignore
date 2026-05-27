@@ -1,0 +1,11 @@
+# Ignore cloned repositories
+WebRTC/
+abseil-cpp/
+
+# Ignore build directories
+build_*/
+dist/
+
+# Ignore python caches
+__pycache__/
+*.pyc
