@@ -1,0 +1,13 @@
+diff --git a/src/qwen3_asr.h b/src/qwen3_asr.h
+index 5f76dd5..6c09e61 100644
+--- a/src/qwen3_asr.h
++++ b/src/qwen3_asr.h
+@@ -55,7 +55,7 @@ public:
+     
+     // Load model from GGUF file
+     // Returns true on success, false on failure (check get_error())
+-    bool load_model(const std::string & model_path);
++    bool load_model(const std::string & model_path, const std::string & mmproj_path = "");
+     
+     // Transcribe audio file (WAV format, 16kHz mono)
+     // Returns transcription result

@@ -1,0 +1,842 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index caa85be..1400dde 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -22,8 +22,53 @@ endif()
+ find_package(Threads REQUIRED)
+ 
+ # GGML library paths
+-set(GGML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ggml")
+-set(GGML_BUILD_DIR "${GGML_DIR}/build")
++if(NOT DEFINED GGML_DIR)
++    set(GGML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ggml")
++endif()
++if(NOT DEFINED GGML_BUILD_DIR)
++    set(GGML_BUILD_DIR "${GGML_DIR}/build")
++endif()
++
++message(STATUS "Using GGML_DIR: ${GGML_DIR}")
++message(STATUS "Using GGML_BUILD_DIR: ${GGML_BUILD_DIR}")
++
++# Find GGML libraries robustly
++find_library(GGML_LIB ggml HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_BASE_LIB ggml-base HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_CPU_LIB ggml-cpu HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_CUDA_LIB ggml-cuda HINTS ${GGML_BUILD_DIR}/src/ggml-cuda ${GGML_BUILD_DIR}/src/ggml-cuda/Release ${GGML_BUILD_DIR}/src/ggml-cuda/Debug)
++find_library(GGML_METAL_LIB ggml-metal HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_VULKAN_LIB ggml-vulkan HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++
++set(GGML_LIBS ${GGML_LIB} ${GGML_BASE_LIB} ${GGML_CPU_LIB})
++if(GGML_CUDA_LIB)
++    list(APPEND GGML_LIBS ${GGML_CUDA_LIB})
++    message(STATUS "Found GGML CUDA library: ${GGML_CUDA_LIB}")
++    find_package(CUDAToolkit REQUIRED)
++    if(CUDAToolkit_FOUND)
++        list(APPEND GGML_LIBS CUDA::cudart CUDA::cublas CUDA::cublasLt CUDA::cuda_driver)
++        message(STATUS "Linked CUDA Toolkit libraries: cudart, cublas, cublasLt, cuda_driver")
++    endif()
++endif()
++if(GGML_METAL_LIB)
++    list(APPEND GGML_LIBS ${GGML_METAL_LIB})
++    message(STATUS "Found GGML Metal library: ${GGML_METAL_LIB}")
++    if(APPLE)
++        list(APPEND GGML_LIBS "-framework Metal" "-framework MetalPerformanceShaders" "-framework Foundation")
++        message(STATUS "Linked Apple frameworks for Metal support")
++    endif()
++endif()
++if(GGML_VULKAN_LIB)
++    list(APPEND GGML_LIBS ${GGML_VULKAN_LIB})
++    message(STATUS "Found GGML Vulkan library: ${GGML_VULKAN_LIB}")
++    find_library(VULKAN_LIB vulkan)
++    if(VULKAN_LIB)
++        list(APPEND GGML_LIBS ${VULKAN_LIB})
++        message(STATUS "Linked Vulkan library: ${VULKAN_LIB}")
++    endif()
++endif()
++
++message(STATUS "GGML libraries: ${GGML_LIBS}")
+ 
+ # Mel spectrogram library
+ add_library(mel_spectrogram STATIC
+@@ -52,13 +97,8 @@ target_include_directories(audio_encoder PUBLIC
+     ${CMAKE_CURRENT_SOURCE_DIR}/src
+     ${GGML_DIR}/include
+ )
+-target_link_directories(audio_encoder PUBLIC
+-    ${GGML_BUILD_DIR}/src
+-)
+ target_link_libraries(audio_encoder PUBLIC
+-    ggml
+-    ggml-base
+-    ggml-cpu
++    ${GGML_LIBS}
+     Threads::Threads
+ )
+ 
+@@ -70,13 +110,8 @@ target_include_directories(text_decoder PUBLIC
+     ${CMAKE_CURRENT_SOURCE_DIR}/src
+     ${GGML_DIR}/include
+ )
+-target_link_directories(text_decoder PUBLIC
+-    ${GGML_BUILD_DIR}/src
+-)
+ target_link_libraries(text_decoder PUBLIC
+-    ggml
+-    ggml-base
+-    ggml-cpu
++    ${GGML_LIBS}
+     Threads::Threads
+ )
+ 
+@@ -112,14 +147,9 @@ target_include_directories(forced_aligner PUBLIC
+     ${CMAKE_CURRENT_SOURCE_DIR}/src
+     ${GGML_DIR}/include
+ )
+-target_link_directories(forced_aligner PUBLIC
+-    ${GGML_BUILD_DIR}/src
+-)
+ target_link_libraries(forced_aligner PUBLIC
+     mel_spectrogram
+-    ggml
+-    ggml-base
+-    ggml-cpu
++    ${GGML_LIBS}
+     Threads::Threads
+ )
+ 
+@@ -183,13 +213,8 @@ add_executable(test_embedding
+ target_include_directories(test_embedding PRIVATE
+     ${GGML_DIR}/include
+ )
+-target_link_directories(test_embedding PRIVATE
+-    ${GGML_BUILD_DIR}/src
+-)
+ target_link_libraries(test_embedding PRIVATE
+-    ggml
+-    ggml-base
+-    ggml-cpu
++    ${GGML_LIBS}
+     Threads::Threads
+ )
+ 
+diff --git a/ggml b/ggml
+--- a/ggml
++++ b/ggml
+@@ -1 +1 @@
+-Subproject commit a8db410a252c8c8f2d120c6f2e7133ebe032f35d
++Subproject commit a8db410a252c8c8f2d120c6f2e7133ebe032f35d-dirty
+diff --git a/src/audio_encoder.cpp b/src/audio_encoder.cpp
+index 682e9fb..a9b3928 100644
+--- a/src/audio_encoder.cpp
++++ b/src/audio_encoder.cpp
+@@ -397,10 +397,24 @@ bool AudioEncoder::encode(const float * mel_data, int n_mel, int n_frames,
+         std::vector<float> chunk_output(out_ctx * out_state);
+         ggml_backend_tensor_get(embd_conv, chunk_output.data(), 0, out_ctx * out_state * sizeof(float));
+         
+-        std::vector<float> chunk_pe(out_ctx * out_state);
+-        compute_sinusoidal_pe(chunk_pe.data(), out_ctx, out_state);
+-        for (int64_t i = 0; i < out_ctx * out_state; ++i) {
+-            chunk_output[i] += chunk_pe[i];
++        if (model_.position_embd) {
++            float * pe_data = (float *)model_.position_embd->data;
++            int64_t max_len = model_.position_embd->ne[1];
++            for (int p = 0; p < out_ctx; ++p) {
++                int pos = p;
++                if (pos >= max_len) {
++                    pos = max_len - 1;
++                }
++                for (int i = 0; i < out_state; ++i) {
++                    chunk_output[p * out_state + i] += pe_data[pos * out_state + i];
++                }
++            }
++        } else {
++            std::vector<float> chunk_pe(out_ctx * out_state);
++            compute_sinusoidal_pe(chunk_pe.data(), out_ctx, out_state);
++            for (int64_t i = 0; i < out_ctx * out_state; ++i) {
++                chunk_output[i] += chunk_pe[i];
++            }
+         }
+         
+         all_conv_outputs.insert(all_conv_outputs.end(), chunk_output.begin(), chunk_output.end());
+@@ -658,10 +672,24 @@ bool AudioEncoder::encode_no_chunk(const float * mel_data, int n_mel, int n_fram
+     
+     ggml_backend_sched_reset(state_.sched);
+     
+-    std::vector<float> pos_emb(out_ctx * n_state);
+-    compute_sinusoidal_pe(pos_emb.data(), out_ctx, n_state);
+-    for (int64_t i = 0; i < out_ctx * n_state; ++i) {
+-        conv_output[i] += pos_emb[i];
++    if (model_.position_embd) {
++        float * pe_data = (float *)model_.position_embd->data;
++        int64_t max_len = model_.position_embd->ne[1];
++        for (int p = 0; p < out_ctx; ++p) {
++            int pos = p;
++            if (pos >= max_len) {
++                pos = max_len - 1;
++            }
++            for (int i = 0; i < n_state; ++i) {
++                conv_output[p * n_state + i] += pe_data[pos * n_state + i];
++            }
++        }
++    } else {
++        std::vector<float> pos_emb(out_ctx * n_state);
++        compute_sinusoidal_pe(pos_emb.data(), out_ctx, n_state);
++        for (int64_t i = 0; i < out_ctx * n_state; ++i) {
++            conv_output[i] += pos_emb[i];
++        }
+     }
+     
+     state_.compute_meta.resize(ggml_tensor_overhead() * QWEN3_ASR_MAX_NODES + ggml_graph_overhead());
+diff --git a/src/forced_aligner.cpp b/src/forced_aligner.cpp
+index 0c3722d..3118421 100644
+--- a/src/forced_aligner.cpp
++++ b/src/forced_aligner.cpp
+@@ -9,10 +9,17 @@
+ #include <algorithm>
+ #include <fstream>
+ #include <sstream>
++#if defined(_WIN32)
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++#else
+ #include <sys/mman.h>
+ #include <sys/stat.h>
+ #include <fcntl.h>
+ #include <unistd.h>
++#endif
+ 
+ #define QWEN3_FA_MAX_NODES 16384
+ 
+@@ -409,6 +416,38 @@ bool ForcedAligner::create_tensors(struct gguf_context * ctx) {
+ }
+ 
+ bool ForcedAligner::load_tensor_data(const std::string & path, struct gguf_context * ctx) {
++#if defined(_WIN32)
++    HANDLE hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
++    if (hFile == INVALID_HANDLE_VALUE) {
++        error_msg_ = "Failed to open file for mmap: " + path;
++        return false;
++    }
++    
++    LARGE_INTEGER size;
++    if (!GetFileSizeEx(hFile, &size)) {
++        error_msg_ = "Failed to get file size: " + path;
++        CloseHandle(hFile);
++        return false;
++    }
++    
++    HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
++    if (hMapping == NULL) {
++        error_msg_ = "Failed to create file mapping: " + path;
++        CloseHandle(hFile);
++        return false;
++    }
++    
++    void * mmap_addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
++    CloseHandle(hMapping);
++    CloseHandle(hFile);
++    
++    if (mmap_addr == NULL) {
++        error_msg_ = "Failed to map view of file: " + path;
++        return false;
++    }
++    
++    size_t st_size = static_cast<size_t>(size.QuadPart);
++#else
+     int fd = open(path.c_str(), O_RDONLY);
+     if (fd < 0) {
+         error_msg_ = "Failed to open file for mmap: " + path;
+@@ -430,11 +469,14 @@ bool ForcedAligner::load_tensor_data(const std::string & path, struct gguf_conte
+         return false;
+     }
+     
++    size_t st_size = st.st_size;
++#endif
++    
+     model_.mmap_addr = mmap_addr;
+-    model_.mmap_size = st.st_size;
++    model_.mmap_size = st_size;
+     
+     const size_t data_offset = gguf_get_data_offset(ctx);
+-    const size_t total_size = st.st_size - data_offset;
++    const size_t total_size = st_size - data_offset;
+     uint8_t * data_base = (uint8_t *)mmap_addr + data_offset;
+     
+     const int64_t n_tensors = gguf_get_n_tensors(ctx);
+@@ -453,7 +495,11 @@ bool ForcedAligner::load_tensor_data(const std::string & path, struct gguf_conte
+     }
+     if (!model_.buffer) {
+         error_msg_ = "Failed to create buffer from mmap";
+-        munmap(mmap_addr, st.st_size);
++#if defined(_WIN32)
++        UnmapViewOfFile(mmap_addr);
++#else
++        munmap(mmap_addr, st_size);
++#endif
+         model_.mmap_addr = nullptr;
+         model_.mmap_size = 0;
+         return false;
+@@ -1729,7 +1775,11 @@ void free_forced_aligner_model(forced_aligner_model & model) {
+         model.ctx = nullptr;
+     }
+     if (model.mmap_addr) {
++#if defined(_WIN32)
++        UnmapViewOfFile(model.mmap_addr);
++#else
+         munmap(model.mmap_addr, model.mmap_size);
++#endif
+         model.mmap_addr = nullptr;
+         model.mmap_size = 0;
+     }
+diff --git a/src/gguf_loader.cpp b/src/gguf_loader.cpp
+index e37b670..9f6b5b1 100644
+--- a/src/gguf_loader.cpp
++++ b/src/gguf_loader.cpp
+@@ -3,10 +3,17 @@
+ #include <cstdio>
+ #include <cstring>
+ #include <fstream>
++#if defined(_WIN32)
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++#else
+ #include <sys/mman.h>
+ #include <sys/stat.h>
+ #include <fcntl.h>
+ #include <unistd.h>
++#endif
+ 
+ namespace qwen3_asr {
+ 
+@@ -65,24 +72,53 @@ bool GGUFLoader::parse_hparams(struct gguf_context * ctx, audio_encoder_model &
+         return gguf_get_val_f32(ctx, idx);
+     };
+     
++    std::string arch = "";
++    int64_t arch_idx = gguf_find_key(ctx, "general.architecture");
++    if (arch_idx >= 0) {
++        arch = gguf_get_val_str(ctx, arch_idx);
++    }
++    
++    bool is_clip = (arch == "clip");
++    
+     auto & hp = model.hparams;
+-    hp.n_encoder_layers = get_u32("audio.encoder_layers", 18);
+-    hp.d_model = get_u32("audio.d_model", 896);
+-    hp.n_attention_heads = get_u32("audio.attention_heads", 14);
+-    hp.ffn_dim = get_u32("audio.ffn_dim", 3584);
+-    hp.conv_channels = get_u32("audio.conv_channels", 480);
+-    hp.conv_out_dim = get_u32("audio.conv_out_dim", 896);
+-    hp.n_mel_bins = get_u32("audio.num_mel_bins", 128);
+-    hp.n_window_infer = get_u32("audio.n_window_infer", 800);
+-    hp.layer_norm_eps = get_f32("audio.layer_norm_eps", 1e-5f);
++    if (is_clip) {
++        hp.n_encoder_layers = get_u32("clip.audio.block_count", 24);
++        hp.d_model = get_u32("clip.audio.embedding_length", 1024);
++        hp.n_attention_heads = get_u32("clip.audio.attention.head_count", 16);
++        hp.ffn_dim = get_u32("clip.audio.feed_forward_length", 4096);
++        hp.conv_channels = get_u32("clip.audio.conv_channels", 480);
++        hp.conv_out_dim = get_u32("clip.audio.conv_out_dim", hp.d_model);
++        hp.n_mel_bins = get_u32("clip.audio.num_mel_bins", 128);
++        hp.n_window_infer = get_u32("clip.audio.n_window_infer", 800);
++        hp.layer_norm_eps = get_f32("clip.audio.attention.layer_norm_epsilon", 1e-5f);
++    } else {
++        hp.n_encoder_layers = get_u32("qwen3-asr.audio.encoder.layer_count", 18);
++        hp.d_model = get_u32("qwen3-asr.audio.encoder.embedding_length", 896);
++        hp.n_attention_heads = get_u32("qwen3-asr.audio.encoder.attention.head_count", 14);
++        hp.ffn_dim = get_u32("qwen3-asr.audio.encoder.feed_forward_length", 3584);
++        hp.conv_channels = get_u32("qwen3-asr.audio.conv_channels", 480);
++        hp.conv_out_dim = get_u32("qwen3-asr.audio.conv_out_dim", hp.d_model);
++        hp.n_mel_bins = get_u32("qwen3-asr.audio.num_mel_bins", 128);
++        hp.n_window_infer = get_u32("qwen3-asr.audio.n_window_infer", 800);
++        hp.layer_norm_eps = get_f32("qwen3-asr.audio.layer_norm_eps", 1e-5f);
++    }
+     
+     auto & thp = model.text_hparams;
+-    thp.hidden_size = get_u32("text.hidden_size", 1024);
+-    thp.n_decoder_layers = get_u32("text.decoder_layers", 28);
+-    thp.n_attention_heads = get_u32("text.attention_heads", 16);
+-    thp.n_key_value_heads = get_u32("text.num_key_value_heads", 8);
+-    thp.intermediate_size = get_u32("text.intermediate_size", 3072);
+-    thp.rms_norm_eps = get_f32("text.rms_norm_eps", 1e-6f);
++    if (is_clip) {
++        thp.hidden_size = get_u32("clip.audio.projection_dim", 2048);
++        thp.n_decoder_layers = get_u32("text.decoder_layers", 28);
++        thp.n_attention_heads = get_u32("text.attention_heads", 16);
++        thp.n_key_value_heads = get_u32("text.num_key_value_heads", 8);
++        thp.intermediate_size = get_u32("text.intermediate_size", 6144);
++        thp.rms_norm_eps = get_f32("text.rms_norm_eps", 1e-6f);
++    } else {
++        thp.hidden_size = get_u32("text.hidden_size", 1024);
++        thp.n_decoder_layers = get_u32("text.decoder_layers", 28);
++        thp.n_attention_heads = get_u32("text.attention_heads", 16);
++        thp.n_key_value_heads = get_u32("text.num_key_value_heads", 8);
++        thp.intermediate_size = get_u32("text.intermediate_size", 3072);
++        thp.rms_norm_eps = get_f32("text.rms_norm_eps", 1e-6f);
++    }
+     
+     return true;
+ }
+@@ -127,28 +163,33 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+             total_elements = (size * blck_size) / type_size;
+         }
+         
+-        if (strstr(name, "encoder.conv1.weight")) {
++        if (strstr(name, "encoder.conv1.weight") || strstr(name, "conv2d.1.weight")) {
+             ne[0] = 3; ne[1] = 3; ne[2] = 1; ne[3] = model.hparams.conv_channels;
+             n_dims = 4;
+-        } else if (strstr(name, "encoder.conv2.weight") || strstr(name, "encoder.conv3.weight")) {
++        } else if (strstr(name, "encoder.conv2.weight") || strstr(name, "conv2d.2.weight") || 
++                   strstr(name, "encoder.conv3.weight") || strstr(name, "conv2d.3.weight")) {
+             ne[0] = 3; ne[1] = 3; ne[2] = model.hparams.conv_channels; ne[3] = model.hparams.conv_channels;
+             n_dims = 4;
+-        } else if ((strstr(name, "encoder.conv1.bias") || strstr(name, "encoder.conv2.bias") || 
+-                    strstr(name, "encoder.conv3.bias"))) {
++        } else if (strstr(name, "encoder.conv1.bias") || strstr(name, "conv2d.1.bias") || 
++                   strstr(name, "encoder.conv2.bias") || strstr(name, "conv2d.2.bias") || 
++                   strstr(name, "encoder.conv3.bias") || strstr(name, "conv2d.3.bias")) {
+             ne[0] = model.hparams.conv_channels;
+             n_dims = 1;
+-        } else if (strstr(name, "encoder.conv_out.weight")) {
++        } else if (strstr(name, "encoder.conv_out.weight") || strstr(name, "conv_out.weight")) {
+             ne[0] = model.hparams.conv_channels * 16;
+             ne[1] = model.hparams.d_model;
+             n_dims = 2;
+         } else if (strstr(name, "attn_q.weight") || strstr(name, "attn_k.weight") || 
+-                   strstr(name, "attn_v.weight") || strstr(name, "attn_out.weight")) {
++                   strstr(name, "attn_v.weight") || strstr(name, "attn_out.weight") ||
++                   strstr(name, "attn_output.weight")) {
+             ne[0] = model.hparams.d_model;
+             ne[1] = model.hparams.d_model;
+             n_dims = 2;
+         } else if (strstr(name, "attn_q.bias") || strstr(name, "attn_k.bias") || 
+                    strstr(name, "attn_v.bias") || strstr(name, "attn_out.bias") ||
+-                   strstr(name, "attn_norm.weight") || strstr(name, "attn_norm.bias")) {
++                   strstr(name, "attn_output.bias") ||
++                   strstr(name, "attn_norm.weight") || strstr(name, "attn_norm.bias") ||
++                   strstr(name, "ln1.weight") || strstr(name, "ln1.bias")) {
+             ne[0] = model.hparams.d_model;
+             n_dims = 1;
+         } else if (strstr(name, "ffn_up.weight")) {
+@@ -163,26 +204,31 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+             ne[0] = model.hparams.ffn_dim;
+             n_dims = 1;
+         } else if (strstr(name, "ffn_down.bias") || strstr(name, "ffn_norm.weight") || 
+-                   strstr(name, "ffn_norm.bias")) {
++                   strstr(name, "ffn_norm.bias") || strstr(name, "ln2.weight") || strstr(name, "ln2.bias")) {
+             ne[0] = model.hparams.d_model;
+             n_dims = 1;
+-        } else if (strstr(name, "ln_post.weight") || strstr(name, "ln_post.bias")) {
++        } else if (strstr(name, "ln_post.weight") || strstr(name, "ln_post.bias") ||
++                   strstr(name, "post_ln.weight") || strstr(name, "post_ln.bias")) {
+             ne[0] = model.hparams.d_model;
+             n_dims = 1;
+-        } else if (strstr(name, "encoder.proj1.weight")) {
++        } else if (strstr(name, "encoder.proj1.weight") || strstr(name, "mlp.1.weight")) {
+             ne[0] = model.hparams.d_model;
+             ne[1] = model.hparams.d_model;
+             n_dims = 2;
+-        } else if (strstr(name, "encoder.proj1.bias")) {
++        } else if (strstr(name, "encoder.proj1.bias") || strstr(name, "mlp.1.bias")) {
+             ne[0] = model.hparams.d_model;
+             n_dims = 1;
+-        } else if (strstr(name, "encoder.proj2.weight")) {
++        } else if (strstr(name, "encoder.proj2.weight") || strstr(name, "mlp.2.weight")) {
+             ne[0] = model.hparams.d_model;
+             ne[1] = model.text_hparams.hidden_size;
+             n_dims = 2;
+-        } else if (strstr(name, "encoder.proj2.bias")) {
++        } else if (strstr(name, "encoder.proj2.bias") || strstr(name, "mlp.2.bias")) {
+             ne[0] = model.text_hparams.hidden_size;
+             n_dims = 1;
++        } else if (strstr(name, "a.position_embd.weight") || strstr(name, "position_embd.weight")) {
++            ne[0] = model.hparams.d_model;
++            ne[1] = total_elements / model.hparams.d_model;
++            n_dims = 2;
+         } else {
+             int64_t remaining = total_elements;
+             ne[0] = remaining;
+@@ -197,35 +243,38 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+         ggml_set_name(tensor, name);
+         model.tensors[name] = tensor;
+         
+-        if (strstr(name, "encoder.conv1.weight")) {
++        if (strstr(name, "encoder.conv1.weight") || strstr(name, "conv2d.1.weight")) {
+             model.conv2d1_w = tensor;
+-        } else if (strstr(name, "encoder.conv1.bias")) {
++        } else if (strstr(name, "encoder.conv1.bias") || strstr(name, "conv2d.1.bias")) {
+             model.conv2d1_b = tensor;
+-        } else if (strstr(name, "encoder.conv2.weight")) {
++        } else if (strstr(name, "encoder.conv2.weight") || strstr(name, "conv2d.2.weight")) {
+             model.conv2d2_w = tensor;
+-        } else if (strstr(name, "encoder.conv2.bias")) {
++        } else if (strstr(name, "encoder.conv2.bias") || strstr(name, "conv2d.2.bias")) {
+             model.conv2d2_b = tensor;
+-        } else if (strstr(name, "encoder.conv3.weight")) {
++        } else if (strstr(name, "encoder.conv3.weight") || strstr(name, "conv2d.3.weight")) {
+             model.conv2d3_w = tensor;
+-        } else if (strstr(name, "encoder.conv3.bias")) {
++        } else if (strstr(name, "encoder.conv3.bias") || strstr(name, "conv2d.3.bias")) {
+             model.conv2d3_b = tensor;
+-        } else if (strstr(name, "encoder.conv_out.weight")) {
++        } else if (strstr(name, "encoder.conv_out.weight") || strstr(name, "conv_out.weight")) {
+             model.conv_out_w = tensor;
+-        } else if (strstr(name, "encoder.ln_post.weight")) {
++        } else if (strstr(name, "encoder.ln_post.weight") || strstr(name, "post_ln.weight")) {
+             model.ln_post_w = tensor;
+-        } else if (strstr(name, "encoder.ln_post.bias")) {
++        } else if (strstr(name, "encoder.ln_post.bias") || strstr(name, "post_ln.bias")) {
+             model.ln_post_b = tensor;
+-        } else if (strstr(name, "encoder.proj1.weight")) {
++        } else if (strstr(name, "encoder.proj1.weight") || strstr(name, "mlp.1.weight")) {
+             model.proj1_w = tensor;
+-        } else if (strstr(name, "encoder.proj1.bias")) {
++        } else if (strstr(name, "encoder.proj1.bias") || strstr(name, "mlp.1.bias")) {
+             model.proj1_b = tensor;
+-        } else if (strstr(name, "encoder.proj2.weight")) {
++        } else if (strstr(name, "encoder.proj2.weight") || strstr(name, "mlp.2.weight")) {
+             model.proj2_w = tensor;
+-        } else if (strstr(name, "encoder.proj2.bias")) {
++        } else if (strstr(name, "encoder.proj2.bias") || strstr(name, "mlp.2.bias")) {
+             model.proj2_b = tensor;
+-        } else if (strstr(name, "audio.encoder.blk.")) {
++        } else if (strstr(name, "a.position_embd.weight") || strstr(name, "position_embd.weight")) {
++            model.position_embd = tensor;
++        } else if (strstr(name, "audio.encoder.blk.") || strstr(name, "a.blk.")) {
+             int layer_idx = -1;
+-            if (sscanf(name, "audio.encoder.blk.%d.", &layer_idx) == 1 && 
++            if ((sscanf(name, "audio.encoder.blk.%d.", &layer_idx) == 1 ||
++                 sscanf(name, "a.blk.%d.", &layer_idx) == 1) && 
+                 layer_idx >= 0 && layer_idx < model.hparams.n_encoder_layers) {
+                 auto & layer = model.layers[layer_idx];
+                 
+@@ -235,16 +284,16 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+                 else if (strstr(name, "attn_k.bias")) layer.attn_k_b = tensor;
+                 else if (strstr(name, "attn_v.weight")) layer.attn_v_w = tensor;
+                 else if (strstr(name, "attn_v.bias")) layer.attn_v_b = tensor;
+-                else if (strstr(name, "attn_out.weight")) layer.attn_out_w = tensor;
+-                else if (strstr(name, "attn_out.bias")) layer.attn_out_b = tensor;
+-                else if (strstr(name, "attn_norm.weight")) layer.attn_norm_w = tensor;
+-                else if (strstr(name, "attn_norm.bias")) layer.attn_norm_b = tensor;
++                else if (strstr(name, "attn_out.weight") || strstr(name, "attn_output.weight")) layer.attn_out_w = tensor;
++                else if (strstr(name, "attn_out.bias") || strstr(name, "attn_output.bias")) layer.attn_out_b = tensor;
++                else if (strstr(name, "attn_norm.weight") || strstr(name, "ln1.weight")) layer.attn_norm_w = tensor;
++                else if (strstr(name, "attn_norm.bias") || strstr(name, "ln1.bias")) layer.attn_norm_b = tensor;
+                 else if (strstr(name, "ffn_up.weight")) layer.ffn_up_w = tensor;
+                 else if (strstr(name, "ffn_up.bias")) layer.ffn_up_b = tensor;
+                 else if (strstr(name, "ffn_down.weight")) layer.ffn_down_w = tensor;
+                 else if (strstr(name, "ffn_down.bias")) layer.ffn_down_b = tensor;
+-                else if (strstr(name, "ffn_norm.weight")) layer.ffn_norm_w = tensor;
+-                else if (strstr(name, "ffn_norm.bias")) layer.ffn_norm_b = tensor;
++                else if (strstr(name, "ffn_norm.weight") || strstr(name, "ln2.weight")) layer.ffn_norm_w = tensor;
++                else if (strstr(name, "ffn_norm.bias") || strstr(name, "ln2.bias")) layer.ffn_norm_b = tensor;
+             }
+         }
+     }
+@@ -254,6 +303,38 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+ 
+ bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context * ctx, 
+                                    audio_encoder_model & model) {
++#if defined(_WIN32)
++    HANDLE hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
++    if (hFile == INVALID_HANDLE_VALUE) {
++        error_msg_ = "Failed to open file for mmap: " + path;
++        return false;
++    }
++    
++    LARGE_INTEGER size;
++    if (!GetFileSizeEx(hFile, &size)) {
++        error_msg_ = "Failed to get file size: " + path;
++        CloseHandle(hFile);
++        return false;
++    }
++    
++    HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
++    if (hMapping == NULL) {
++        error_msg_ = "Failed to create file mapping: " + path;
++        CloseHandle(hFile);
++        return false;
++    }
++    
++    void * mmap_addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
++    CloseHandle(hMapping);
++    CloseHandle(hFile);
++    
++    if (mmap_addr == NULL) {
++        error_msg_ = "Failed to map view of file: " + path;
++        return false;
++    }
++    
++    size_t st_size = static_cast<size_t>(size.QuadPart);
++#else
+     int fd = open(path.c_str(), O_RDONLY);
+     if (fd < 0) {
+         error_msg_ = "Failed to open file for mmap: " + path;
+@@ -275,11 +356,14 @@ bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context
+         return false;
+     }
+     
++    size_t st_size = st.st_size;
++#endif
++    
+     model.mmap_addr = mmap_addr;
+-    model.mmap_size = st.st_size;
++    model.mmap_size = st_size;
+     
+     const size_t data_offset = gguf_get_data_offset(ctx);
+-    const size_t total_size = st.st_size - data_offset;
++    const size_t total_size = st_size - data_offset;
+     uint8_t * data_base = (uint8_t *)mmap_addr + data_offset;
+     
+     // Find largest tensor for max_tensor_size hint
+@@ -300,7 +384,11 @@ bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context
+     }
+     if (!model.buffer) {
+         error_msg_ = "Failed to create buffer from mmap";
+-        munmap(mmap_addr, st.st_size);
++#if defined(_WIN32)
++        UnmapViewOfFile(mmap_addr);
++#else
++        munmap(mmap_addr, st_size);
++#endif
+         model.mmap_addr = nullptr;
+         model.mmap_size = 0;
+         return false;
+@@ -331,7 +419,11 @@ void free_model(audio_encoder_model & model) {
+         model.ctx = nullptr;
+     }
+     if (model.mmap_addr) {
++#if defined(_WIN32)
++        UnmapViewOfFile(model.mmap_addr);
++#else
+         munmap(model.mmap_addr, model.mmap_size);
++#endif
+         model.mmap_addr = nullptr;
+         model.mmap_size = 0;
+     }
+diff --git a/src/gguf_loader.h b/src/gguf_loader.h
+index f4ffe22..f8ea344 100644
+--- a/src/gguf_loader.h
++++ b/src/gguf_loader.h
+@@ -77,6 +77,8 @@ struct audio_encoder_model {
+     // Output projection (conv_out)
+     struct ggml_tensor * conv_out_w = nullptr;
+     
++    struct ggml_tensor * position_embd = nullptr;
++    
+     struct ggml_tensor * ln_post_w = nullptr;
+     struct ggml_tensor * ln_post_b = nullptr;
+     struct ggml_tensor * proj1_w = nullptr;
+diff --git a/src/qwen3_asr.cpp b/src/qwen3_asr.cpp
+index c1321e3..4da2967 100644
+--- a/src/qwen3_asr.cpp
++++ b/src/qwen3_asr.cpp
+@@ -18,10 +18,15 @@ static int64_t get_time_ms() {
+ Qwen3ASR::Qwen3ASR() = default;
+ Qwen3ASR::~Qwen3ASR() = default;
+ 
+-bool Qwen3ASR::load_model(const std::string & model_path) {
++bool Qwen3ASR::load_model(const std::string & model_path, const std::string & mmproj_path) {
+     int64_t t_start = get_time_ms();
+     
+-    if (!encoder_.load_model(model_path)) {
++    std::string encoder_path = model_path;
++    if (!mmproj_path.empty() && mmproj_path != "unused" && mmproj_path.find("0.6B") == std::string::npos) {
++        encoder_path = mmproj_path;
++    }
++    
++    if (!encoder_.load_model(encoder_path)) {
+         error_msg_ = "Failed to load audio encoder: " + encoder_.get_error();
+         return false;
+     }
+@@ -35,6 +40,13 @@ bool Qwen3ASR::load_model(const std::string & model_path) {
+     
+     model_loaded_ = true;
+     
++    const auto & hp = encoder_.get_hparams();
++    const auto & cfg = decoder_.get_config();
++    fprintf(stderr, "Encoder config: layers=%d, d_model=%d, heads=%d, ffn_dim=%d, conv_channels=%d\n",
++            hp.n_encoder_layers, hp.d_model, hp.n_attention_heads, hp.ffn_dim, hp.conv_channels);
++    fprintf(stderr, "Decoder config: layers=%d, hidden_size=%d, heads=%d, intermediate_size=%d, vocab_size=%d\n",
++            cfg.n_decoder_layers, cfg.hidden_size, cfg.n_attention_heads, cfg.intermediate_size, cfg.vocab_size);
++    
+     int64_t t_end = get_time_ms();
+     fprintf(stderr, "Model loaded in %lld ms\n", (long long)(t_end - t_start));
+     
+diff --git a/src/qwen3_asr.h b/src/qwen3_asr.h
+index 5f76dd5..6c09e61 100644
+--- a/src/qwen3_asr.h
++++ b/src/qwen3_asr.h
+@@ -55,7 +55,7 @@ public:
+     
+     // Load model from GGUF file
+     // Returns true on success, false on failure (check get_error())
+-    bool load_model(const std::string & model_path);
++    bool load_model(const std::string & model_path, const std::string & mmproj_path = "");
+     
+     // Transcribe audio file (WAV format, 16kHz mono)
+     // Returns transcription result
+diff --git a/src/text_decoder.cpp b/src/text_decoder.cpp
+index bbefe7c..83c333c 100644
+--- a/src/text_decoder.cpp
++++ b/src/text_decoder.cpp
+@@ -5,10 +5,17 @@
+ #include <cstring>
+ #include <cstdio>
+ #include <fstream>
++#if defined(_WIN32)
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++#else
+ #include <sys/mman.h>
+ #include <sys/stat.h>
+ #include <fcntl.h>
+ #include <unistd.h>
++#endif
+ 
+ #define QWEN3_ASR_MAX_NODES 8192
+ 
+@@ -124,22 +131,28 @@ bool TextDecoder::parse_config(struct gguf_context * ctx) {
+         return gguf_get_val_f32(ctx, idx);
+     };
+     
++    std::string arch = "qwen3-asr";
++    int64_t arch_idx = gguf_find_key(ctx, "general.architecture");
++    if (arch_idx >= 0) {
++        arch = gguf_get_val_str(ctx, arch_idx);
++    }
++    
+     auto & cfg = model_.config;
+-    cfg.vocab_size = get_u32("qwen3-asr.vocab_size", 151936);
+-    cfg.hidden_size = get_u32("qwen3-asr.embedding_length", 1024);
+-    cfg.n_decoder_layers = get_u32("qwen3-asr.block_count", 28);
+-    cfg.n_attention_heads = get_u32("qwen3-asr.attention.head_count", 16);
+-    cfg.n_key_value_heads = get_u32("qwen3-asr.attention.head_count_kv", 8);
+-    cfg.intermediate_size = get_u32("qwen3-asr.feed_forward_length", 3072);
+-    cfg.head_dim = get_u32("qwen3-asr.attention.key_length", 128);
+-    cfg.rms_norm_eps = get_f32("qwen3-asr.attention.layer_norm_rms_epsilon", 1e-6f);
+-    cfg.rope_theta = get_f32("qwen3-asr.rope.freq_base", 1000000.0f);
++    cfg.vocab_size = get_u32((arch + ".vocab_size").c_str(), 151936);
++    cfg.hidden_size = get_u32((arch + ".embedding_length").c_str(), 1024);
++    cfg.n_decoder_layers = get_u32((arch + ".block_count").c_str(), 28);
++    cfg.n_attention_heads = get_u32((arch + ".attention.head_count").c_str(), 16);
++    cfg.n_key_value_heads = get_u32((arch + ".attention.head_count_kv").c_str(), 8);
++    cfg.intermediate_size = get_u32((arch + ".feed_forward_length").c_str(), 3072);
++    cfg.head_dim = get_u32((arch + ".attention.key_length").c_str(), 128);
++    cfg.rms_norm_eps = get_f32((arch + ".attention.layer_norm_rms_epsilon").c_str(), 1e-6f);
++    cfg.rope_theta = get_f32((arch + ".rope.freq_base").c_str(), 1000000.0f);
+     
+     cfg.pad_token_id = 151643;
+     cfg.eos_token_id = 151645;
+-    cfg.audio_start_token_id = get_u32("qwen3-asr.audio.start_token_id", 151669);
+-    cfg.audio_end_token_id = get_u32("qwen3-asr.audio.end_token_id", 151670);
+-    cfg.audio_pad_token_id = get_u32("qwen3-asr.audio.pad_token_id", 151676);
++    cfg.audio_start_token_id = get_u32((arch + ".audio.start_token_id").c_str(), 151669);
++    cfg.audio_end_token_id = get_u32((arch + ".audio.end_token_id").c_str(), 151670);
++    cfg.audio_pad_token_id = get_u32((arch + ".audio.pad_token_id").c_str(), 151676);
+     
+     return true;
+ }
+@@ -266,6 +279,38 @@ bool TextDecoder::create_tensors(struct gguf_context * ctx) {
+ }
+ 
+ bool TextDecoder::load_tensor_data(const std::string & path, struct gguf_context * ctx) {
++#if defined(_WIN32)
++    HANDLE hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
++    if (hFile == INVALID_HANDLE_VALUE) {
++        error_msg_ = "Failed to open file for mmap: " + path;
++        return false;
++    }
++    
++    LARGE_INTEGER size;
++    if (!GetFileSizeEx(hFile, &size)) {
++        error_msg_ = "Failed to get file size: " + path;
++        CloseHandle(hFile);
++        return false;
++    }
++    
++    HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
++    if (hMapping == NULL) {
++        error_msg_ = "Failed to create file mapping: " + path;
++        CloseHandle(hFile);
++        return false;
++    }
++    
++    void * mmap_addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
++    CloseHandle(hMapping);
++    CloseHandle(hFile);
++    
++    if (mmap_addr == NULL) {
++        error_msg_ = "Failed to map view of file: " + path;
++        return false;
++    }
++    
++    size_t st_size = static_cast<size_t>(size.QuadPart);
++#else
+     int fd = open(path.c_str(), O_RDONLY);
+     if (fd < 0) {
+         error_msg_ = "Failed to open file for mmap: " + path;
+@@ -287,11 +332,14 @@ bool TextDecoder::load_tensor_data(const std::string & path, struct gguf_context
+         return false;
+     }
+     
++    size_t st_size = st.st_size;
++#endif
++    
+     model_.mmap_addr = mmap_addr;
+-    model_.mmap_size = st.st_size;
++    model_.mmap_size = st_size;
+     
+     const size_t data_offset = gguf_get_data_offset(ctx);
+-    const size_t total_size = st.st_size - data_offset;
++    const size_t total_size = st_size - data_offset;
+     uint8_t * data_base = (uint8_t *)mmap_addr + data_offset;
+     
+     const int64_t n_tensors = gguf_get_n_tensors(ctx);
+@@ -311,7 +359,11 @@ bool TextDecoder::load_tensor_data(const std::string & path, struct gguf_context
+     }
+     if (!model_.buffer) {
+         error_msg_ = "Failed to create buffer from mmap";
+-        munmap(mmap_addr, st.st_size);
++#if defined(_WIN32)
++        UnmapViewOfFile(mmap_addr);
++#else
++        munmap(mmap_addr, st_size);
++#endif
+         model_.mmap_addr = nullptr;
+         model_.mmap_size = 0;
+         return false;
+@@ -771,7 +823,11 @@ void free_decoder_model(text_decoder_model & model) {
+         model.ctx = nullptr;
+     }
+     if (model.mmap_addr) {
++#if defined(_WIN32)
++        UnmapViewOfFile(model.mmap_addr);
++#else
+         munmap(model.mmap_addr, model.mmap_size);
++#endif
+         model.mmap_addr = nullptr;
+         model.mmap_size = 0;
+     }
+diff --git a/tests/run_all_tests.sh b/tests/run_all_tests.sh
+old mode 100755
+new mode 100644
+diff --git a/tests/test_injection.cpp b/tests/test_injection.cpp
+index da5c8de..d94cd1a 100644
+--- a/tests/test_injection.cpp
++++ b/tests/test_injection.cpp
+@@ -42,7 +42,7 @@ static void test_embed_tokens() {
+     }
+     
+     int32_t input_ids[] = {0, 5, 3};
+-    int32_t n_tokens = 3;
++    const int32_t n_tokens = 3;
+     
+     float output[n_tokens * hidden_size];
+     embed_tokens(input_ids, n_tokens, token_embd, vocab_size, hidden_size, output);

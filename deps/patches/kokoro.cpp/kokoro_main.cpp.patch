@@ -1,0 +1,19 @@
+diff --git a/kokoro_main.cpp b/kokoro_main.cpp
+index 3a8c209..7474146 100644
+--- a/kokoro_main.cpp
++++ b/kokoro_main.cpp
+@@ -97,12 +97,13 @@ int main(int argc, char** argv) {
+ #endif
+     
+     std::string vocab_path = "dict/vocab.txt";
++    std::string dict_dir = "dict";
+     if (argc > 4) {
+         vocab_path = argv[4];
+     }
+ 
+     try {
+-        Kokoro tts(model_path, voices_path, vocab_path);
++        Kokoro tts(model_path, voices_path, dict_dir, vocab_path);
+         
+         auto voice = tts.get_voice_style("zf_002"); // Default voice
+         auto result = tts.create(text, voice, 1.0f);

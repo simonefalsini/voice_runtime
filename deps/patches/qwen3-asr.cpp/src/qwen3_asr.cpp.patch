@@ -1,0 +1,35 @@
+diff --git a/src/qwen3_asr.cpp b/src/qwen3_asr.cpp
+index c1321e3..4da2967 100644
+--- a/src/qwen3_asr.cpp
++++ b/src/qwen3_asr.cpp
+@@ -18,10 +18,15 @@ static int64_t get_time_ms() {
+ Qwen3ASR::Qwen3ASR() = default;
+ Qwen3ASR::~Qwen3ASR() = default;
+ 
+-bool Qwen3ASR::load_model(const std::string & model_path) {
++bool Qwen3ASR::load_model(const std::string & model_path, const std::string & mmproj_path) {
+     int64_t t_start = get_time_ms();
+     
+-    if (!encoder_.load_model(model_path)) {
++    std::string encoder_path = model_path;
++    if (!mmproj_path.empty() && mmproj_path != "unused" && mmproj_path.find("0.6B") == std::string::npos) {
++        encoder_path = mmproj_path;
++    }
++    
++    if (!encoder_.load_model(encoder_path)) {
+         error_msg_ = "Failed to load audio encoder: " + encoder_.get_error();
+         return false;
+     }
+@@ -35,6 +40,13 @@ bool Qwen3ASR::load_model(const std::string & model_path) {
+     
+     model_loaded_ = true;
+     
++    const auto & hp = encoder_.get_hparams();
++    const auto & cfg = decoder_.get_config();
++    fprintf(stderr, "Encoder config: layers=%d, d_model=%d, heads=%d, ffn_dim=%d, conv_channels=%d\n",
++            hp.n_encoder_layers, hp.d_model, hp.n_attention_heads, hp.ffn_dim, hp.conv_channels);
++    fprintf(stderr, "Decoder config: layers=%d, hidden_size=%d, heads=%d, intermediate_size=%d, vocab_size=%d\n",
++            cfg.n_decoder_layers, cfg.hidden_size, cfg.n_attention_heads, cfg.intermediate_size, cfg.vocab_size);
++    
+     int64_t t_end = get_time_ms();
+     fprintf(stderr, "Model loaded in %lld ms\n", (long long)(t_end - t_start));

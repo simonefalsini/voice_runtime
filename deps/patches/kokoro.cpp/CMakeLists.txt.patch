@@ -1,0 +1,35 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 9e322f9..0536cfc 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -33,18 +33,20 @@ if (MSVC)
+ endif()
+ 
+ # ONNX Runtime Configuration
+-# Priority 1: Check third_party/onnxruntime
+-set(LOCAL_ONNX_PATH "${CMAKE_SOURCE_DIR}/third_party/onnxruntime")
+-if(EXISTS "${LOCAL_ONNX_PATH}")
+-    message(STATUS "Using local ONNX Runtime from: ${LOCAL_ONNX_PATH}")
+-    set(ONNXRUNTIME_ROOT "${LOCAL_ONNX_PATH}")
+-# Priority 2: User defined ONNXRUNTIME_ROOT
+-elseif(NOT DEFINED ONNXRUNTIME_ROOT)
+-    # Priority 3: Common system paths
+-    if (APPLE)
+-        set(ONNXRUNTIME_ROOT "/opt/homebrew/opt/onnxruntime")
++# Priority 1: User defined ONNXRUNTIME_ROOT
++if(NOT DEFINED ONNXRUNTIME_ROOT)
++    # Priority 2: Check third_party/onnxruntime
++    set(LOCAL_ONNX_PATH "${CMAKE_SOURCE_DIR}/third_party/onnxruntime")
++    if(EXISTS "${LOCAL_ONNX_PATH}")
++        message(STATUS "Using local ONNX Runtime from: ${LOCAL_ONNX_PATH}")
++        set(ONNXRUNTIME_ROOT "${LOCAL_ONNX_PATH}")
+     else()
+-        set(ONNXRUNTIME_ROOT "/usr/local")
++        # Priority 3: Common system paths
++        if (APPLE)
++            set(ONNXRUNTIME_ROOT "/opt/homebrew/opt/onnxruntime")
++        else()
++            set(ONNXRUNTIME_ROOT "/usr/local")
++        endif()
+     endif()
+ endif()

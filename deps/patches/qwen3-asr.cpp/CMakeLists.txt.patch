@@ -1,0 +1,120 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index caa85be..1400dde 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -22,8 +22,53 @@ endif()
+ find_package(Threads REQUIRED)
+ 
+ # GGML library paths
+-set(GGML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ggml")
+-set(GGML_BUILD_DIR "${GGML_DIR}/build")
++if(NOT DEFINED GGML_DIR)
++    set(GGML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ggml")
++endif()
++if(NOT DEFINED GGML_BUILD_DIR)
++    set(GGML_BUILD_DIR "${GGML_DIR}/build")
++endif()
++
++message(STATUS "Using GGML_DIR: ${GGML_DIR}")
++message(STATUS "Using GGML_BUILD_DIR: ${GGML_BUILD_DIR}")
++
++# Find GGML libraries robustly
++find_library(GGML_LIB ggml HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_BASE_LIB ggml-base HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_CPU_LIB ggml-cpu HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_CUDA_LIB ggml-cuda HINTS ${GGML_BUILD_DIR}/src/ggml-cuda ${GGML_BUILD_DIR}/src/ggml-cuda/Release ${GGML_BUILD_DIR}/src/ggml-cuda/Debug)
++find_library(GGML_METAL_LIB ggml-metal HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_VULKAN_LIB ggml-vulkan HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++
++set(GGML_LIBS ${GGML_LIB} ${GGML_BASE_LIB} ${GGML_CPU_LIB})
++if(GGML_CUDA_LIB)
++    list(APPEND GGML_LIBS ${GGML_CUDA_LIB})
++    message(STATUS "Found GGML CUDA library: ${GGML_CUDA_LIB}")
++    find_package(CUDAToolkit REQUIRED)
++    if(CUDAToolkit_FOUND)
++        list(APPEND GGML_LIBS CUDA::cudart CUDA::cublas CUDA::cublasLt CUDA::cuda_driver)
++        message(STATUS "Linked CUDA Toolkit libraries: cudart, cublas, cublasLt, cuda_driver")
++    endif()
++endif()
++if(GGML_METAL_LIB)
++    list(APPEND GGML_LIBS ${GGML_METAL_LIB})
++    message(STATUS "Found GGML Metal library: ${GGML_METAL_LIB}")
++    if(APPLE)
++        list(APPEND GGML_LIBS "-framework Metal" "-framework MetalPerformanceShaders" "-framework Foundation")
++        message(STATUS "Linked Apple frameworks for Metal support")
++    endif()
++endif()
++if(GGML_VULKAN_LIB)
++    list(APPEND GGML_LIBS ${GGML_VULKAN_LIB})
++    message(STATUS "Found GGML Vulkan library: ${GGML_VULKAN_LIB}")
++    find_library(VULKAN_LIB vulkan)
++    if(VULKAN_LIB)
++        list(APPEND GGML_LIBS ${VULKAN_LIB})
++        message(STATUS "Linked Vulkan library: ${VULKAN_LIB}")
++    endif()
++endif()
++
++message(STATUS "GGML libraries: ${GGML_LIBS}")
+ 
+ # Mel spectrogram library
+ add_library(mel_spectrogram STATIC
+@@ -52,13 +97,8 @@ target_include_directories(audio_encoder PUBLIC
+     ${CMAKE_CURRENT_SOURCE_DIR}/src
+     ${GGML_DIR}/include
+ )
+-target_link_directories(audio_encoder PUBLIC
+-    ${GGML_BUILD_DIR}/src
+-)
+ target_link_libraries(audio_encoder PUBLIC
+-    ggml
+-    ggml-base
+-    ggml-cpu
++    ${GGML_LIBS}
+     Threads::Threads
+ )
+ 
+@@ -70,13 +110,8 @@ target_include_directories(text_decoder PUBLIC
+     ${CMAKE_CURRENT_SOURCE_DIR}/src
+     ${GGML_DIR}/include
+ )
+-target_link_directories(text_decoder PUBLIC
+-    ${GGML_BUILD_DIR}/src
+-)
+ target_link_libraries(text_decoder PUBLIC
+-    ggml
+-    ggml-base
+-    ggml-cpu
++    ${GGML_LIBS}
+     Threads::Threads
+ )
+ 
+@@ -112,14 +147,9 @@ target_include_directories(forced_aligner PUBLIC
+     ${CMAKE_CURRENT_SOURCE_DIR}/src
+     ${GGML_DIR}/include
+ )
+-target_link_directories(forced_aligner PUBLIC
+-    ${GGML_BUILD_DIR}/src
+-)
+ target_link_libraries(forced_aligner PUBLIC
+     mel_spectrogram
+-    ggml
+-    ggml-base
+-    ggml-cpu
++    ${GGML_LIBS}
+     Threads::Threads
+ )
+ 
+@@ -183,13 +213,8 @@ add_executable(test_embedding
+ target_include_directories(test_embedding PRIVATE
+     ${GGML_DIR}/include
+ )
+-target_link_directories(test_embedding PRIVATE
+-    ${GGML_BUILD_DIR}/src
+-)
+ target_link_libraries(test_embedding PRIVATE
+-    ggml
+-    ggml-base
+-    ggml-cpu
++    ${GGML_LIBS}
+     Threads::Threads
+ )

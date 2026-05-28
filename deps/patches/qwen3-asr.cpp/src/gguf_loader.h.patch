@@ -1,0 +1,13 @@
+diff --git a/src/gguf_loader.h b/src/gguf_loader.h
+index f4ffe22..f8ea344 100644
+--- a/src/gguf_loader.h
++++ b/src/gguf_loader.h
+@@ -77,6 +77,8 @@ struct audio_encoder_model {
+     // Output projection (conv_out)
+     struct ggml_tensor * conv_out_w = nullptr;
+     
++    struct ggml_tensor * position_embd = nullptr;
++    
+     struct ggml_tensor * ln_post_w = nullptr;
+     struct ggml_tensor * ln_post_b = nullptr;
+     struct ggml_tensor * proj1_w = nullptr;
