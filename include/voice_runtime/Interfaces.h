@@ -76,6 +76,12 @@ public:
     virtual void setCaptureInputQueue(AudioFrameQueue* micIn)    = 0;
     virtual void setRenderInputQueue(AudioFrameQueue* ttsRefIn)  = 0;
     virtual void setOutputQueue(AudioFrameQueue* cleanOut)       = 0;
+
+    // Opzionale: alcuni DSP/AEC possono produrre direttamente eventi VAD
+    // dopo AEC/NS/AGC. Default no-op per mantenere compatibili i nodi esistenti.
+    virtual void setVadEventQueue(VadEventQueue* events)         { (void)events; }
+    virtual void setSpeechThreshold(float threshold)             { (void)threshold; }
+    virtual bool isSpeaking() const                              { return false; }
 };
 
 // ---------------------------------------------------------------------------

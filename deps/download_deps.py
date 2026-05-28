@@ -1,7 +1,10 @@
 import os
+import sys
 import subprocess
 import urllib.request
 import base64
+import json
+import zipfile
 
 def run_cmd(cmd, cwd=None):
     print(f"Running: {' '.join(cmd)}")
@@ -21,46 +24,222 @@ def download_gerrit_file(url, output_path):
         print(f"Error downloading {url}: {e}")
         raise
 
+def download_and_extract_onnx(deps_dir, dist_dir):
+    print("--- Downloading and Installing ONNX Runtime 1.24.1 ---")
+    onnx_root = os.path.join(dist_dir, "onnx") # libraries/onnx/
+    
+    # Check if already installed
+    check_file = None
+    if sys.platform.startswith('win'):
+        check_file = os.path.join(onnx_root, "windows", "Release", "lib", "onnxruntime.lib")
+    elif sys.platform.startswith('darwin'):
+        check_file = os.path.join(onnx_root, "osx", "Release", "lib", "libonnxruntime.dylib")
+    else:
+        check_file = os.path.join(onnx_root, "linux", "Release", "lib", "libonnxruntime.so")
+        
+    if check_file and os.path.exists(check_file):
+        print("ONNX Runtime 1.24.1 is already installed.")
+        return
+
+    tmp_dir = os.path.join(deps_dir, "build_onnx_tmp")
+    if os.path.exists(tmp_dir):
+        shutil_rmtree_safe(tmp_dir)
+    os.makedirs(tmp_dir, exist_ok=True)
+    
+    nupkg_url = "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/1.24.1"
+    nupkg_path = os.path.join(tmp_dir, "onnxruntime.zip")
+    
+    print(f"Downloading ONNX Runtime NuGet from {nupkg_url}...")
+    try:
+        urllib.request.urlretrieve(nupkg_url, nupkg_path)
+    except Exception as e:
+        print(f"Failed to download ONNX Runtime from NuGet: {e}")
+        return
+        
+    print("Extracting NuGet package...")
+    with zipfile.ZipFile(nupkg_path, 'r') as zip_ref:
+        zip_ref.extractall(tmp_dir)
+        
+    def copy_headers_to(dest_inc):
+        src_headers = os.path.join(tmp_dir, "build", "native", "include")
+        if os.path.exists(src_headers):
+            os.makedirs(dest_inc, exist_ok=True)
+            for root, dirs, files in os.walk(src_headers):
+                for file in files:
+                    src_file = os.path.join(root, file)
+                    rel = os.path.relpath(src_file, src_headers)
+                    dest_file = os.path.join(dest_inc, rel)
+                    os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+                    import shutil
+                    shutil.copy2(src_file, dest_file)
+
+    import shutil
+    # 1. Windows x64
+    win_src = os.path.join(tmp_dir, "runtimes", "win-x64", "native")
+    if os.path.exists(win_src):
+        for config in ["Release", "Debug"]:
+            platform_dir = os.path.join(onnx_root, "windows", config)
+            copy_headers_to(os.path.join(platform_dir, "include"))
+            dest_lib = os.path.join(platform_dir, "lib")
+            os.makedirs(dest_lib, exist_ok=True)
+            for file in os.listdir(win_src):
+                if file.endswith('.lib') or file.endswith('.dll') or file.endswith('.pdb'):
+                    shutil.copy2(os.path.join(win_src, file), os.path.join(dest_lib, file))
+                    
+    # 2. Linux x64
+    linux_src = os.path.join(tmp_dir, "runtimes", "linux-x64", "native")
+    if os.path.exists(linux_src):
+        for config in ["Release", "Debug"]:
+            platform_dir = os.path.join(onnx_root, "linux", config)
+            copy_headers_to(os.path.join(platform_dir, "include"))
+            dest_lib = os.path.join(platform_dir, "lib")
+            os.makedirs(dest_lib, exist_ok=True)
+            for file in os.listdir(linux_src):
+                if file.endswith('.so'):
+                    shutil.copy2(os.path.join(linux_src, file), os.path.join(dest_lib, file))
+                    
+    # 3. macOS (OSX)
+    osx_src = os.path.join(tmp_dir, "runtimes", "osx", "native")
+    if os.path.exists(osx_src):
+        for config in ["Release", "Debug"]:
+            platform_dir = os.path.join(onnx_root, "osx", config)
+            copy_headers_to(os.path.join(platform_dir, "include"))
+            dest_lib = os.path.join(platform_dir, "lib")
+            os.makedirs(dest_lib, exist_ok=True)
+            for file in os.listdir(osx_src):
+                if file.endswith('.dylib'):
+                    shutil.copy2(os.path.join(osx_src, file), os.path.join(dest_lib, file))
+                    
+    # 4. iOS
+    ios_zip_path = os.path.join(tmp_dir, "runtimes", "ios", "native", "onnxruntime.xcframework.zip")
+    if os.path.exists(ios_zip_path):
+        ios_extract_dir = os.path.join(tmp_dir, "runtimes", "ios", "native", "extracted")
+        with zipfile.ZipFile(ios_zip_path, 'r') as zip_ref:
+            zip_ref.extractall(ios_extract_dir)
+        for config in ["Release", "Debug"]:
+            platform_dir = os.path.join(onnx_root, "ios", config)
+            copy_headers_to(os.path.join(platform_dir, "include"))
+            dest_lib = os.path.join(platform_dir, "lib")
+            os.makedirs(dest_lib, exist_ok=True)
+            shutil.copytree(os.path.join(ios_extract_dir, "onnxruntime.xcframework"), 
+                            os.path.join(dest_lib, "onnxruntime.xcframework"), dirs_exist_ok=True)
+                            
+    # 5. Android
+    aar_path = os.path.join(tmp_dir, "runtimes", "android", "native", "onnxruntime.aar")
+    if os.path.exists(aar_path):
+        android_extract_dir = os.path.join(tmp_dir, "runtimes", "android", "native", "extracted")
+        with zipfile.ZipFile(aar_path, 'r') as zip_ref:
+            zip_ref.extractall(android_extract_dir)
+        jni_dir = os.path.join(android_extract_dir, "jni")
+        if os.path.exists(jni_dir):
+            for abi in os.listdir(jni_dir):
+                abi_src = os.path.join(jni_dir, abi)
+                if os.path.isdir(abi_src):
+                    for config in ["Release", "Debug"]:
+                        platform_dir = os.path.join(onnx_root, "android", abi, config)
+                        copy_headers_to(os.path.join(platform_dir, "include"))
+                        dest_lib = os.path.join(platform_dir, "lib")
+                        os.makedirs(dest_lib, exist_ok=True)
+                        for file in os.listdir(abi_src):
+                            if file.endswith('.so'):
+                                shutil.copy2(os.path.join(abi_src, file), os.path.join(dest_lib, file))
+                                
+    # Clean up
+    shutil_rmtree_safe(tmp_dir)
+    print("ONNX Runtime 1.24.1 installation complete!")
+
+def shutil_rmtree_safe(path):
+    import shutil
+    shutil.rmtree(path, ignore_errors=True)
+
 def main():
     deps_dir = os.path.dirname(os.path.abspath(__file__))
+    dist_dir = os.path.join(os.path.dirname(deps_dir), "libraries")
     
-    # 1. Clone WebRTC if not exists (although it should exist in the workspace)
-    webrtc_dir = os.path.join(deps_dir, "WebRTC")
-    if not os.path.exists(webrtc_dir):
-        print("Cloning WebRTC...")
-        run_cmd(["git", "clone", "https://webrtc.googlesource.com/src", "WebRTC"], cwd=deps_dir)
-    else:
-        print("WebRTC directory already exists.")
-
-    # Apply MSVC compatibility patch if available and not yet applied
-    patch_file = os.path.join(deps_dir, "webrtc_msvc_compat.patch")
-    if os.path.exists(patch_file):
-        print("Checking/Applying MSVC compatibility patch...")
-        try:
-            # Check if patch can be applied cleanly (means it is not yet applied)
-            res = subprocess.run(["git", "apply", "--check", patch_file], cwd=webrtc_dir, capture_output=True)
-            if res.returncode == 0:
-                print("Applying patch...")
-                run_cmd(["git", "apply", patch_file], cwd=webrtc_dir)
-            else:
-                # Check if it is already applied
-                res_rev = subprocess.run(["git", "apply", "--reverse", "--check", patch_file], cwd=webrtc_dir, capture_output=True)
-                if res_rev.returncode == 0:
-                    print("Patch is already applied.")
+    # 1. List of dependency repositories
+    dependencies = [
+        {
+            "name": "WebRTC",
+            "url": "https://webrtc.googlesource.com/src"
+        },
+        {
+            "name": "abseil-cpp",
+            "url": "https://github.com/abseil/abseil-cpp.git"
+        },
+        {
+            "name": "ggml",
+            "url": "https://github.com/ggml-org/ggml.git"
+        },
+        {
+            "name": "espeak-ng",
+            "url": "https://github.com/espeak-ng/espeak-ng.git"
+        },
+        {
+            "name": "kokoro.cpp",
+            "url": "https://github.com/koth/kokoro.cpp"
+        },
+        {
+            "name": "qwen3-asr.cpp",
+            "url": "https://github.com/predict-woo/qwen3-asr.cpp"
+        }
+    ]
+    
+    for dep in dependencies:
+        name = dep["name"]
+        default_url = dep["url"]
+        
+        # Check if patch metadata exists to get exact repo URL & commit hash
+        metadata_file = os.path.join(deps_dir, "patches", name, "metadata.json")
+        commit_hash = None
+        repo_url = default_url
+        
+        if os.path.exists(metadata_file):
+            try:
+                with open(metadata_file, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                    repo_url = meta.get("repository") or default_url
+                    commit_hash = meta.get("commit")
+                    print(f"Found patch metadata for {name}: {repo_url} @ {commit_hash}")
+            except Exception as e:
+                print(f"Error reading patch metadata for {name}: {e}")
+                
+        dep_path = os.path.join(deps_dir, name)
+        if not os.path.exists(dep_path):
+            print(f"Cloning {name} from {repo_url}...")
+            run_cmd(["git", "clone", repo_url, name], cwd=deps_dir)
+        else:
+            print(f"Directory {name} already exists.")
+            
+        # Ensure we checkout the exact commit hash if specified in metadata
+        if commit_hash:
+            current_hash = subprocess.run(["git", "rev-parse", "HEAD"], cwd=dep_path, capture_output=True, text=True).stdout.strip()
+            if current_hash != commit_hash:
+                print(f"Checking out specific commit {commit_hash} for {name}...")
+                # Fetch first in case the commit is not present locally
+                subprocess.run(["git", "fetch", "origin"], cwd=dep_path)
+                run_cmd(["git", "checkout", commit_hash], cwd=dep_path)
+                
+        # Check and apply combined patch if exists
+        patch_file = os.path.join(deps_dir, "patches", name, "combined.patch")
+        if os.path.exists(patch_file):
+            print(f"Checking/Applying patch for {name}...")
+            try:
+                res = subprocess.run(["git", "apply", "--check", patch_file], cwd=dep_path, capture_output=True)
+                if res.returncode == 0:
+                    print("Applying patch...")
+                    run_cmd(["git", "apply", patch_file], cwd=dep_path)
                 else:
-                    print("Warning: Patch cannot be applied and does not seem to be already applied (conflict?).")
-        except Exception as e:
-            print(f"Error checking/applying patch: {e}")
+                    # Check if already applied
+                    res_rev = subprocess.run(["git", "apply", "--reverse", "--check", patch_file], cwd=dep_path, capture_output=True)
+                    if res_rev.returncode == 0:
+                        print("Patch is already applied.")
+                    else:
+                        print(f"Warning: Patch for {name} cannot be applied cleanly and does not seem already applied.")
+            except Exception as e:
+                print(f"Error applying patch for {name}: {e}")
 
-    # 2. Clone Abseil-cpp
-    abseil_dir = os.path.join(deps_dir, "abseil-cpp")
-    if not os.path.exists(abseil_dir):
-        print("Cloning Abseil-cpp...")
-        run_cmd(["git", "clone", "https://github.com/abseil/abseil-cpp.git", "abseil-cpp"], cwd=deps_dir)
-    else:
-        print("Abseil-cpp directory already exists.")
-
-    # 3. Download rnnoise files
+    # 2. Download WebRTC third party files
+    webrtc_dir = os.path.join(deps_dir, "WebRTC")
     rnnoise_src_dir = os.path.join(webrtc_dir, "third_party", "rnnoise", "src")
     rnnoise_files = [
         ("rnn_activations.h", "https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/rnnoise/src/rnn_activations.h?format=TEXT"),
@@ -70,7 +249,6 @@ def main():
     for filename, url in rnnoise_files:
         download_gerrit_file(url, os.path.join(rnnoise_src_dir, filename))
 
-    # 4. Download pffft files
     pffft_src_dir = os.path.join(webrtc_dir, "third_party", "pffft", "src")
     pffft_files = [
         ("fftpack.c", "https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/pffft/src/fftpack.c?format=TEXT"),
@@ -81,7 +259,10 @@ def main():
     for filename, url in pffft_files:
         download_gerrit_file(url, os.path.join(pffft_src_dir, filename))
 
-    print("\nAll dependencies downloaded and cloned successfully!")
+    # 3. Download ONNX Runtime
+    download_and_extract_onnx(deps_dir, dist_dir)
+
+    print("\nAll dependencies downloaded, cloned, and patched successfully!")
 
 if __name__ == "__main__":
     main()

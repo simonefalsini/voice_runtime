@@ -104,6 +104,13 @@ public:
         aec_->setRenderInputQueue(&ttsRefQueue_);
         aec_->setOutputQueue(&cleanQueue_);
 
+        // Se il nodo AEC/DSP integra anche VAD, gli passiamo gli eventi qui.
+        // Nei nodi che non supportano VAD questi metodi sono no-op.
+        if (cfg_.enableVad) {
+            aec_->setVadEventQueue(&vadEventQueue_);
+            aec_->setSpeechThreshold(cfg_.vadSpeechThreshold);
+        }
+
         // AEC → [sttAdapter?] → STT
         const bool needSttAdapter =
             cfg_.enableSttAdapter &&
@@ -298,8 +305,9 @@ private:
             const std::size_t poolCap  = audioPool_.capacity();
             const std::size_t diskBytes= llmDiskBuffer_.memorySnapshot().size();
             std::snprintf(buf, sizeof(buf),
-                "pool=%zu/%zu free | llmMem=%zu B | ttsInt=%s | llmInt=%s",
+                "pool=%zu/%zu free | llmMem=%zu B | dspVad=%s | ttsInt=%s | llmInt=%s",
                 poolFree, poolCap, diskBytes,
+                aec_ && aec_->isSpeaking() ? "speech" : "silence",
                 ttsInterrupt_.check() ? "ACTIVE" : "idle",
                 llmInterrupt_.check() ? "ACTIVE" : "idle");
             return buf;

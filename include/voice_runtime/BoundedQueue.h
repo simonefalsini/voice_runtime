@@ -108,6 +108,22 @@ public:
         return true;
     }
 
+
+    // -----------------------------------------------------------------------
+    // tryPop — non bloccante; ritorna false se vuota oppure stopped e vuota
+    // -----------------------------------------------------------------------
+
+    bool tryPop(T& out) {
+        std::unique_lock<std::mutex> lk(mutex_);
+        if (queue_.empty()) return false;
+        out = std::move(queue_.front());
+        queue_.pop_front();
+        ++stats_.consumed;
+        lk.unlock();
+        notFull_.notify_one();
+        return true;
+    }
+
     // -----------------------------------------------------------------------
     // Controllo ciclo di vita
     // -----------------------------------------------------------------------
