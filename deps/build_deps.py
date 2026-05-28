@@ -878,6 +878,392 @@ def copy_headers(deps_dir, dist_dir):
 
     print(f"Headers exported to {include_dest}")
 
+def generate_cmake_imports(dist_dir):
+    print("--- Generating CMake Import Modules ---")
+    cmake_dir = os.path.join(dist_dir, "cmake")
+    os.makedirs(cmake_dir, exist_ok=True)
+    
+    # Template contents
+    find_webrtc = """# FindWebRtcAudioProcessing.cmake
+# Defines target: WebRtcAudioProcessing::WebRtcAudioProcessing
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(PLATFORM_DIR "windows")
+    set(LIB_SUFFIX ".lib")
+    set(LIB_PREFIX "")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(PLATFORM_DIR "android/${ANDROID_ABI}")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(PLATFORM_DIR "ios")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(PLATFORM_DIR "osx")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+else()
+    set(PLATFORM_DIR "linux")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+endif()
+
+set(WEBRTC_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include/webrtc_audio_processing")
+
+if(NOT TARGET WebRtcAudioProcessing::WebRtcAudioProcessing)
+    add_library(WebRtcAudioProcessing::WebRtcAudioProcessing STATIC IMPORTED GLOBAL)
+    set_target_properties(WebRtcAudioProcessing::WebRtcAudioProcessing PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${WEBRTC_INCLUDE_DIR}"
+    )
+
+    # Debug config
+    set(LIB_DEBUG "${CMAKE_CURRENT_LIST_DIR}/../lib/webrtc_audio_processing/${PLATFORM_DIR}/Debug/${LIB_PREFIX}webrtc_audio_processing${LIB_SUFFIX}")
+    if(EXISTS "${LIB_DEBUG}")
+        set_property(TARGET WebRtcAudioProcessing::WebRtcAudioProcessing APPEND PROPERTY IMPORTED_CONFIGURATIONS DEBUG)
+        set_target_properties(WebRtcAudioProcessing::WebRtcAudioProcessing PROPERTIES
+            IMPORTED_LOCATION_DEBUG "${LIB_DEBUG}"
+        )
+    endif()
+
+    # Release config
+    set(LIB_RELEASE "${CMAKE_CURRENT_LIST_DIR}/../lib/webrtc_audio_processing/${PLATFORM_DIR}/Release/${LIB_PREFIX}webrtc_audio_processing${LIB_SUFFIX}")
+    if(EXISTS "${LIB_RELEASE}")
+        set_property(TARGET WebRtcAudioProcessing::WebRtcAudioProcessing APPEND PROPERTY IMPORTED_CONFIGURATIONS RELEASE)
+        set_target_properties(WebRtcAudioProcessing::WebRtcAudioProcessing PROPERTIES
+            IMPORTED_LOCATION_RELEASE "${LIB_RELEASE}"
+        )
+    endif()
+endif()
+"""
+
+    find_ggml = """# FindGgml.cmake
+# Defines targets: Ggml::Ggml and Ggml::<sublib> (ggml, ggml-base, ggml-cpu, ggml-cuda, ggml-metal, ggml-vulkan)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(PLATFORM_DIR "windows")
+    set(LIB_SUFFIX ".lib")
+    set(LIB_PREFIX "")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(PLATFORM_DIR "android/${ANDROID_ABI}")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(PLATFORM_DIR "ios")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(PLATFORM_DIR "osx")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+else()
+    set(PLATFORM_DIR "linux")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+endif()
+
+set(GGML_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include/ggml")
+
+if(NOT TARGET Ggml::Ggml)
+    # Main target
+    add_library(Ggml::Ggml STATIC IMPORTED GLOBAL)
+    set_target_properties(Ggml::Ggml PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${GGML_INCLUDE_DIR}"
+    )
+
+    # We check for configurations
+    foreach(config IN ITEMS DEBUG RELEASE)
+        string(TOLOWER ${config} config_lower)
+        if(config_lower STREQUAL "debug")
+            set(cfg_dir "Debug")
+        else()
+            set(cfg_dir "Release")
+        endif()
+        
+        set(base_dir "${CMAKE_CURRENT_LIST_DIR}/../lib/ggml/${PLATFORM_DIR}/${cfg_dir}")
+        if(EXISTS "${base_dir}")
+            set_property(TARGET Ggml::Ggml APPEND PROPERTY IMPORTED_CONFIGURATIONS ${config})
+            
+            # List of candidate libraries: ggml, ggml-base, ggml-cpu, ggml-cuda, ggml-metal, ggml-vulkan
+            set(cand_libs "ggml" "ggml-base" "ggml-cpu" "ggml-cuda" "ggml-metal" "ggml-vulkan")
+            set(GGML_LIBS "")
+            foreach(lib IN LISTS cand_libs)
+                set(lib_path "${base_dir}/${LIB_PREFIX}${lib}${LIB_SUFFIX}")
+                if(EXISTS "${lib_path}")
+                    # Create imported target for this sub-library if not exists
+                    if(NOT TARGET Ggml::${lib})
+                        add_library(Ggml::${lib} STATIC IMPORTED GLOBAL)
+                    endif()
+                    set_target_properties(Ggml::${lib} PROPERTIES
+                        IMPORTED_LOCATION_${config} "${lib_path}"
+                    )
+                    list(APPEND GGML_LIBS Ggml::${lib})
+                endif()
+            endforeach()
+            
+            # Link main target to all sub-libraries
+            set_target_properties(Ggml::Ggml PROPERTIES
+                INTERFACE_LINK_LIBRARIES_${config} "${GGML_LIBS}"
+            )
+        endif()
+    endforeach()
+endif()
+"""
+
+    find_espeak = """# FindEspeakNg.cmake
+# Defines target: EspeakNg::EspeakNg and EspeakNg::<sublib> (espeak-ng, ucd)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(PLATFORM_DIR "windows")
+    set(LIB_SUFFIX ".lib")
+    set(LIB_PREFIX "")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(PLATFORM_DIR "android/${ANDROID_ABI}")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(PLATFORM_DIR "ios")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(PLATFORM_DIR "osx")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+else()
+    set(PLATFORM_DIR "linux")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+endif()
+
+set(ESPEAK_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include/espeak-ng")
+
+if(NOT TARGET EspeakNg::EspeakNg)
+    add_library(EspeakNg::EspeakNg STATIC IMPORTED GLOBAL)
+    set_target_properties(EspeakNg::EspeakNg PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${ESPEAK_INCLUDE_DIR}"
+    )
+
+    foreach(config IN ITEMS DEBUG RELEASE)
+        string(TOLOWER ${config} config_lower)
+        if(config_lower STREQUAL "debug")
+            set(cfg_dir "Debug")
+        else()
+            set(cfg_dir "Release")
+        endif()
+        
+        set(base_dir "${CMAKE_CURRENT_LIST_DIR}/../lib/espeak-ng/${PLATFORM_DIR}/${cfg_dir}")
+        if(EXISTS "${base_dir}")
+            set_property(TARGET EspeakNg::EspeakNg APPEND PROPERTY IMPORTED_CONFIGURATIONS ${config})
+            
+            set(libs "espeak-ng" "ucd")
+            set(ESPEAK_LIBS "")
+            foreach(lib IN LISTS libs)
+                set(lib_path "${base_dir}/${LIB_PREFIX}${lib}${LIB_SUFFIX}")
+                if(EXISTS "${lib_path}")
+                    if(NOT TARGET EspeakNg::${lib})
+                        add_library(EspeakNg::${lib} STATIC IMPORTED GLOBAL)
+                    endif()
+                    set_target_properties(EspeakNg::${lib} PROPERTIES
+                        IMPORTED_LOCATION_${config} "${lib_path}"
+                    )
+                    list(APPEND ESPEAK_LIBS EspeakNg::${lib})
+                endif()
+            endforeach()
+            
+            set_target_properties(EspeakNg::EspeakNg PROPERTIES
+                INTERFACE_LINK_LIBRARIES_${config} "${ESPEAK_LIBS}"
+            )
+        endif()
+    endforeach()
+endif()
+"""
+
+    find_kokoro = """# FindKokoro.cmake
+# Defines target: Kokoro::Kokoro (composed of Kokoro::kokoro_core and Kokoro::onnxruntime)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(PLATFORM_DIR "windows")
+    set(LIB_SUFFIX ".lib")
+    set(LIB_PREFIX "")
+    set(ONNX_LIB_NAME "onnxruntime")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(PLATFORM_DIR "android/${ANDROID_ABI}")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+    set(ONNX_LIB_NAME "onnxruntime")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(PLATFORM_DIR "ios")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+    set(ONNX_LIB_NAME "onnxruntime")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(PLATFORM_DIR "osx")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+    set(ONNX_LIB_NAME "onnxruntime")
+else()
+    set(PLATFORM_DIR "linux")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+    set(ONNX_LIB_NAME "onnxruntime")
+endif()
+
+set(KOKORO_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include/kokoro")
+
+if(NOT TARGET Kokoro::Kokoro)
+    add_library(Kokoro::Kokoro STATIC IMPORTED GLOBAL)
+    set_target_properties(Kokoro::Kokoro PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${KOKORO_INCLUDE_DIR}"
+    )
+
+    if(NOT TARGET Kokoro::onnxruntime)
+        add_library(Kokoro::onnxruntime SHARED IMPORTED GLOBAL)
+    endif()
+
+    foreach(config IN ITEMS DEBUG RELEASE)
+        string(TOLOWER ${config} config_lower)
+        if(config_lower STREQUAL "debug")
+            set(cfg_dir "Debug")
+        else()
+            set(cfg_dir "Release")
+        endif()
+        
+        set(base_dir "${CMAKE_CURRENT_LIST_DIR}/../lib/kokoro/${PLATFORM_DIR}/${cfg_dir}")
+        set(onnx_dir "${CMAKE_CURRENT_LIST_DIR}/../onnx/${PLATFORM_DIR}/${cfg_dir}")
+        
+        if(EXISTS "${base_dir}")
+            set_property(TARGET Kokoro::Kokoro APPEND PROPERTY IMPORTED_CONFIGURATIONS ${config})
+            
+            # Kokoro core
+            set(lib_path "${base_dir}/${LIB_PREFIX}kokoro_core${LIB_SUFFIX}")
+            if(EXISTS "${lib_path}")
+                if(NOT TARGET Kokoro::kokoro_core)
+                    add_library(Kokoro::kokoro_core STATIC IMPORTED GLOBAL)
+                endif()
+                set_target_properties(Kokoro::kokoro_core PROPERTIES
+                    IMPORTED_LOCATION_${config} "${lib_path}"
+                )
+            endif()
+            
+            # ONNX Runtime
+            set(onnx_include "${onnx_dir}/include")
+            if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+                set(onnx_lib_file "${onnx_dir}/lib/${ONNX_LIB_NAME}${LIB_SUFFIX}")
+                set(onnx_dll_file "${onnx_dir}/lib/${ONNX_LIB_NAME}.dll")
+            else()
+                set(onnx_lib_file "${onnx_dir}/lib/${LIB_PREFIX}${ONNX_LIB_NAME}${LIB_SUFFIX}")
+            endif()
+            
+            if(EXISTS "${onnx_lib_file}")
+                set_target_properties(Kokoro::onnxruntime PROPERTIES
+                    INTERFACE_INCLUDE_DIRECTORIES "${onnx_include}"
+                )
+                if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+                    set_target_properties(Kokoro::onnxruntime PROPERTIES
+                        IMPORTED_IMPLIB_${config} "${onnx_lib_file}"
+                        IMPORTED_LOCATION_${config} "${onnx_dll_file}"
+                    )
+                else()
+                    set_target_properties(Kokoro::onnxruntime PROPERTIES
+                        IMPORTED_LOCATION_${config} "${onnx_lib_file}"
+                    )
+                endif()
+            endif()
+            
+            set_target_properties(Kokoro::Kokoro PROPERTIES
+                INTERFACE_LINK_LIBRARIES_${config} "Kokoro::kokoro_core;Kokoro::onnxruntime"
+            )
+        endif()
+    endforeach()
+endif()
+"""
+
+    find_qwen3 = """# FindQwen3Asr.cmake
+# Defines target: Qwen3Asr::Qwen3Asr and Qwen3Asr::<component> (qwen3_asr, forced_aligner, text_decoder, audio_encoder, mel_spectrogram, audio_injection)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(PLATFORM_DIR "windows")
+    set(LIB_SUFFIX ".lib")
+    set(LIB_PREFIX "")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(PLATFORM_DIR "android/${ANDROID_ABI}")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(PLATFORM_DIR "ios")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(PLATFORM_DIR "osx")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+else()
+    set(PLATFORM_DIR "linux")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+endif()
+
+set(QWEN3_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include/qwen3-asr")
+
+if(NOT TARGET Qwen3Asr::Qwen3Asr)
+    add_library(Qwen3Asr::Qwen3Asr STATIC IMPORTED GLOBAL)
+    set_target_properties(Qwen3Asr::Qwen3Asr PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${QWEN3_INCLUDE_DIR}"
+    )
+
+    # Qwen3Asr requires Ggml
+    if(NOT TARGET Ggml::Ggml)
+        find_package(Ggml REQUIRED)
+    endif()
+
+    foreach(config IN ITEMS DEBUG RELEASE)
+        string(TOLOWER ${config} config_lower)
+        if(config_lower STREQUAL "debug")
+            set(cfg_dir "Debug")
+        else()
+            set(cfg_dir "Release")
+        endif()
+        
+        set(base_dir "${CMAKE_CURRENT_LIST_DIR}/../lib/qwen3-asr/${PLATFORM_DIR}/${cfg_dir}")
+        if(EXISTS "${base_dir}")
+            set_property(TARGET Qwen3Asr::Qwen3Asr APPEND PROPERTY IMPORTED_CONFIGURATIONS ${config})
+            
+            set(libs "qwen3_asr" "forced_aligner" "text_decoder" "audio_encoder" "mel_spectrogram" "audio_injection")
+            set(QWEN3_LIBS "")
+            foreach(lib IN LISTS libs)
+                set(lib_path "${base_dir}/${LIB_PREFIX}${lib}${LIB_SUFFIX}")
+                if(EXISTS "${lib_path}")
+                    if(NOT TARGET Qwen3Asr::${lib})
+                        add_library(Qwen3Asr::${lib} STATIC IMPORTED GLOBAL)
+                    endif()
+                    set_target_properties(Qwen3Asr::${lib} PROPERTIES
+                        IMPORTED_LOCATION_${config} "${lib_path}"
+                    )
+                    list(APPEND QWEN3_LIBS Qwen3Asr::${lib})
+                endif()
+            endforeach()
+            
+            # Link main target to all components and also GGML
+            set_target_properties(Qwen3Asr::Qwen3Asr PROPERTIES
+                INTERFACE_LINK_LIBRARIES_${config} "${QWEN3_LIBS};Ggml::Ggml"
+            )
+        endif()
+    endforeach()
+endif()
+"""
+
+    with open(os.path.join(cmake_dir, "FindWebRtcAudioProcessing.cmake"), "w", encoding="utf-8") as f:
+        f.write(find_webrtc)
+    with open(os.path.join(cmake_dir, "FindGgml.cmake"), "w", encoding="utf-8") as f:
+        f.write(find_ggml)
+    with open(os.path.join(cmake_dir, "FindEspeakNg.cmake"), "w", encoding="utf-8") as f:
+        f.write(find_espeak)
+    with open(os.path.join(cmake_dir, "FindKokoro.cmake"), "w", encoding="utf-8") as f:
+        f.write(find_kokoro)
+    with open(os.path.join(cmake_dir, "FindQwen3Asr.cmake"), "w", encoding="utf-8") as f:
+        f.write(find_qwen3)
+    print(f"CMake Find modules generated in {cmake_dir}")
+
 def main():
     parser = argparse.ArgumentParser(description="Build WebRTC APM Static Library")
     parser.add_argument("--platform", choices=["windows", "linux", "osx", "ios", "android", "current", "all"], default="current",
@@ -949,6 +1335,9 @@ def main():
     copy_espeak_headers(deps_dir, dist_dir)
     copy_kokoro_headers(deps_dir, dist_dir)
     copy_qwen3_headers(deps_dir, dist_dir)
+    
+    # Generate CMake import configurations
+    generate_cmake_imports(dist_dir)
     print("\nAll dependencies built and packaging complete!")
 
 if __name__ == "__main__":
