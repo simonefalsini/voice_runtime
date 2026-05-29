@@ -238,12 +238,7 @@ protected:
                 if (spkOut_) spkOut_->clear();
             }
 
-            // FIX Bug4: Mark TTS active BEFORE any frame is pushed onto the queues.
-            // The WebRtcDspNode reads ttsState_ atomically in its runLoop. By setting
-            // the signal here — after clearing stale data but before pushFrames() —
-            // we guarantee the DSP sees ttsActive=true before the first reference
-            // frame arrives, preventing a window where reference frames are consumed
-            // without AEC being enabled.
+            // Mark TTS active
             if (ttsState_) ttsState_->setActive(true);
 
             // Segment and push frames
@@ -471,9 +466,7 @@ private:
             (audio16k.size() + refSamplesPerFrame - 1) / static_cast<std::size_t>(refSamplesPerFrame);
 
         std::size_t spkIdx = 0;
-        // NOTE: refIdx was removed — it was a dead variable (initialized to 0, never
-        // incremented) whose guard `refIdx < audio16k.size()` was always true when audio
-        // existed. The actual boundary is now expressed via refStart (see below).
+        std::size_t refIdx = 0;
 
         for (std::size_t f = 0; f < totalSpkFrames; ++f) {
             // Check interrupt between frames
@@ -513,47 +506,36 @@ private:
                 }
                 spkIdx += count;
 
-                // Push AEC reference BEFORE speaker frame (timing requirement: AEC3
-                // must receive the render signal before the corresponding mic capture).
-                if (aecRefOut_ && !audio16k.empty()) {
-                    // Map speaker frame index f → ref frame index proportionally.
+                // Push AEC reference first (timing requirement)
+                if (aecRefOut_ && refIdx < audio16k.size()) {
+                    // Determine corresponding ref frame index
+                    // Ratio: for every speaker frame we advance proportionally
+                    // in the ref buffer.
                     const std::size_t refFrameIdx =
                         f * totalRefFrames / totalSpkFrames;
                     const std::size_t refStart =
                         refFrameIdx * static_cast<std::size_t>(refSamplesPerFrame);
 
-                    // Boundary check on the actual byte offset used — not on a stale counter.
-                    if (refStart < audio16k.size()) {
-                        auto refFrame = aecRefPool_.acquireWithTimeout(
-                            std::chrono::milliseconds(50));
-                        if (refFrame) {
-                            refFrame->format      = config_.aecRefFormat;
-                            refFrame->resizeForFormat();
-                            refFrame->sequence    = refSeq_++;
-                            refFrame->timestampNs = frame->timestampNs;
+                    auto refFrame = aecRefPool_.acquireWithTimeout(
+                        std::chrono::milliseconds(50));
+                    if (refFrame) {
+                        refFrame->format      = config_.aecRefFormat;
+                        refFrame->resizeForFormat();
+                        refFrame->sequence    = refSeq_++;
+                        refFrame->timestampNs = frame->timestampNs;
 
-                            const std::size_t refCount =
-                                static_cast<std::size_t>(refSamplesPerFrame);
-                            const std::size_t refAvail =
-                                std::min(refCount, audio16k.size() - refStart);
-                            std::memcpy(refFrame->pcm16.data(),
-                                        audio16k.data() + refStart,
-                                        refAvail * sizeof(int16_t));
-                            if (refAvail < refCount) {
-                                std::memset(refFrame->pcm16.data() + refAvail, 0,
-                                            (refCount - refAvail) * sizeof(int16_t));
-                            }
-
-                            aecRefOut_->push(std::move(refFrame));
-                        } else {
-                            // Pool exhausted — ref frame dropped, speaker frame still pushed.
-                            // This should be rare: pool size >> queue capacity. If it fires
-                            // repeatedly, increase config_.aecRefPoolSize.
-                            std::fprintf(stderr,
-                                "[KokoroTTS] WARN: aecRefPool timeout at frame %zu/%zu"
-                                " — ref frame dropped, AEC reference gap\n",
-                                f, totalSpkFrames);
+                        const std::size_t refCount =
+                            static_cast<std::size_t>(refSamplesPerFrame);
+                        const std::size_t refAvail =
+                            std::min(refCount, audio16k.size() - refStart);
+                        std::memcpy(refFrame->pcm16.data(),
+                                    audio16k.data() + refStart,
+                                    refAvail * sizeof(int16_t));
+                        if (refAvail < refCount) {
+                            std::memset(refFrame->pcm16.data() + refAvail, 0, (refCount - refAvail) * sizeof(int16_t));
                         }
+
+                        aecRefOut_->push(std::move(refFrame));
                     }
                 }
 

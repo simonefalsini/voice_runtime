@@ -33,7 +33,6 @@ public:
     // Configurazione
     // -----------------------------------------------------------------------
 
-    // FIX 4.4: setDropCallback deve essere chiamato prima di start() su qualunque
     // nodo che usa questa coda. Il callback è fisso per l'intera esecuzione e
     // viene letto senza lock in invokeDropCallback (safe per precondizione).
     void setDropCallback(DropCallback cb) {

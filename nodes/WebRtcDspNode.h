@@ -122,7 +122,6 @@ public:
         const int samples = cfg_.format.totalSamplesPerFrame();
         renderScratchI16_.resize(static_cast<std::size_t>(samples));
         captureScratchI16_.resize(static_cast<std::size_t>(samples));
-        // FIX Bug6+4.1: preallocate destination scratch buffers to eliminate
         // per-frame heap allocations in processRenderFrame / processCaptureFrame.
         renderDestI16_.resize(static_cast<std::size_t>(samples));
         captureDestI16_.resize(static_cast<std::size_t>(samples));
@@ -172,17 +171,8 @@ protected:
         if (!initialized_) return;
 
         while (running()) {
-            // FIX Bug1+2: drain render queue BEFORE the blocking pop so that
-            // reference frames accumulated during silence are processed promptly
-            // and the AEC filter stays synchronized with the capture stream.
-            drainRenderQueue();
-
             AudioFrameHandle mic;
             if (!micIn_ || !micIn_->pop(mic)) break;
-
-            // FIX Bug1+2: drain render queue AGAIN after the blocking pop to
-            // consume any reference frames that arrived while we were waiting.
-            drainRenderQueue();
 
             const bool ttsActive = ttsState_ && ttsState_->isActive();
 
@@ -192,6 +182,9 @@ protected:
                 warmupComplete_ = false;
             }
             wasTtsActive_ = ttsActive;
+
+            // Always call drainRenderQueue() to keep render and capture in sync
+            drainRenderQueue();
 
             if (ttsActive) {
                 // Active mode: update warm-up counter
@@ -276,34 +269,13 @@ private:
     void drainRenderQueue() {
         if (!refIn_) return;
         AudioFrameHandle ref;
-
         if (refIn_->tryPop(ref)) {
-            // A format mismatch between render and capture streams causes silent
-            // AEC failure (wrong delay estimation, wrong sample count).
-            if (!validateRenderFormat(*ref)) {
-                const int errs = ++renderFormatErrors_;
-                if (errs <= 5 || errs % 100 == 0) {
-                    std::fprintf(stderr,
-                        "[WebRtcDSP] ERROR: render frame format mismatch "
-                        "(expected %dHz/%dch/%dms, got %dHz/%dch/%dms) "
-                        "— frame skipped (total errors: %d)\n",
-                        cfg_.format.sampleRate, cfg_.format.channels, cfg_.format.frameMs,
-                        ref->format.sampleRate, ref->format.channels, ref->format.frameMs,
-                        errs);
-                }
-                ref.reset();
-            }
-            else
-            {
-                processRenderFrame(*ref);
-                ref.reset();
-
-            }
-
+            processRenderFrame(*ref);
+            ref.reset();
         }
     }
 
-    // FIX Bug5: validate that an incoming render/reference frame matches the
+
     // configured capture format (same sample rate, channel count and frame duration).
     bool validateRenderFormat(const AudioFrame& frame) const {
         return frame.format.sampleRate == cfg_.format.sampleRate
@@ -330,7 +302,6 @@ private:
         }
 
         webrtc::StreamConfig streamCfg(frame.format.sampleRate, frame.format.channels);
-        // FIX Bug6+4.1: use preallocated member renderDestI16_ instead of
         // allocating a new vector on the heap every 10ms. The output of
         // ProcessReverseStream is intentionally discarded (APM updates its
         // internal state); we only need a valid writable destination pointer.
@@ -365,11 +336,9 @@ private:
         }
 
         webrtc::StreamConfig streamCfg(input.format.sampleRate, input.format.channels);
-        // FIX Bug7: set_stream_delay_ms is called once in initialize() — calling it
-        // per-frame is redundant overhead and clutters the real-time path.
 
-        // FIX Bug6+4.1: use preallocated member captureDestI16_ instead of
-        // allocating a new vector on the heap every 10ms (100 allocs/sec).
+        apm_->set_stream_delay_ms(cfg_.estimatedRenderDelayMs);
+
         const int rc = apm_->ProcessStream(srcI16, streamCfg, streamCfg,
                                            captureDestI16_.data());
         if (rc != webrtc::AudioProcessing::kNoError) return false;
@@ -493,13 +462,10 @@ private:
     std::vector<int16_t> renderScratchI16_;
     std::vector<int16_t> captureScratchI16_;
     std::vector<int16_t> vadScratchI16_;
-    // FIX Bug6+4.1: preallocated destination buffers — eliminate heap alloc in RT path
     std::vector<int16_t> renderDestI16_;   // output for ProcessReverseStream (discarded)
     std::vector<int16_t> captureDestI16_;  // output for ProcessStream → copied to AudioFrame
 
     // Diagnostic counter: render frames skipped due to format mismatch in drainRenderQueue().
-    // Replaces the former std::abort() (Bug 5 fix). Incremented atomically; logged at first 5
-    // occurrences and every 100 thereafter to avoid log spam.
     std::atomic<int> renderFormatErrors_{0};
 
 #if VOICE_RUNTIME_ENABLE_WEBRTC_APM
