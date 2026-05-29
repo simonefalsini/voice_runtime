@@ -377,19 +377,34 @@ int main(int argc, char* argv[]) {
         chunk.timestampNs = now_ns();
         textIn.push(std::move(chunk));
 
-        // Wait for synthesis to complete
-        // The stub generates ~0.5s of audio at 24kHz, so it should finish quickly
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        // Wait for synthesis to start (up to 5 seconds)
+        int startWait = 0;
+        while (!ttsState.isActive() && startWait < 5000) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            startWait += 5;
+        }
 
-        // Count speaker output frames
+        // Wait for synthesis to complete (up to 10 seconds)
         int spkFrameCount = 0;
+        int refFrameCount = 0;
+        int finishWait = 0;
+        while (ttsState.isActive() && finishWait < 10000) {
+            AudioFrameHandle frame;
+            while (spkOut.tryPop(frame)) {
+                ++spkFrameCount;
+            }
+            while (aecRefOut.tryPop(frame)) {
+                ++refFrameCount;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            finishWait += 5;
+        }
+
+        // Pop any remaining frames (in case it finished between loops)
         AudioFrameHandle frame;
         while (spkOut.tryPop(frame)) {
             ++spkFrameCount;
         }
-
-        // Count AEC reference frames
-        int refFrameCount = 0;
         while (aecRefOut.tryPop(frame)) {
             ++refFrameCount;
         }
@@ -455,8 +470,27 @@ int main(int argc, char* argv[]) {
         chunk.timestampNs = now_ns();
         textIn.push(std::move(chunk));
 
-        // Wait for synthesis to finish
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        // Wait for synthesis to start (up to 5 seconds)
+        int startWait = 0;
+        while (!ttsState.isActive() && startWait < 5000) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            startWait += 5;
+        }
+
+        // Wait for synthesis to finish (up to 10 seconds)
+        int finishWait = 0;
+        while (ttsState.isActive() && finishWait < 10000) {
+            AudioFrameHandle dummy;
+            while (spkOut.tryPop(dummy)) {}
+            while (aecRefOut.tryPop(dummy)) {}
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            finishWait += 5;
+        }
+
+        // Pop any remaining frames
+        AudioFrameHandle dummy;
+        while (spkOut.tryPop(dummy)) {}
+        while (aecRefOut.tryPop(dummy)) {}
 
         // After synthesis, TTS should be inactive
         assert(!ttsState.isActive() && "TTS should be inactive after synthesis completes");

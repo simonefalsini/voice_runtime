@@ -18,12 +18,22 @@ def detect_host_platform():
     else:
         return 'unknown'
 
-def copy_static_libs(build_dir, dest_dir, target_names=None):
+def copy_static_libs(build_dir, dest_dir, target_names=None, config=None):
     os.makedirs(dest_dir, exist_ok=True)
     copied = 0
     for root, dirs, files in os.walk(build_dir):
         if "CMakeFiles" in root:
             continue
+        if config:
+            path_parts = os.path.normpath(root).split(os.sep)
+            # Skip folders of other configurations
+            has_other_config = False
+            for cfg in ["Release", "Debug", "MinSizeRel", "RelWithDebInfo"]:
+                if cfg != config and cfg in path_parts:
+                    has_other_config = True
+                    break
+            if has_other_config:
+                continue
         for file in files:
             if file.endswith('.lib') or file.endswith('.a'):
                 # Special check for espeak-ng on Windows to avoid copying the executable import library
@@ -386,7 +396,7 @@ def build_windows(deps_dir, dist_dir):
         shutil.copy(lib_src, os.path.join(lib_dest_dir, "webrtc_audio_processing.lib"))
         absl_build_dir = os.path.join(build_dir, "abseil-cpp")
         if os.path.exists(absl_build_dir):
-            copy_static_libs(absl_build_dir, lib_dest_dir)
+            copy_static_libs(absl_build_dir, lib_dest_dir, config=config)
         
     print("Windows WebRTC build successful for all configurations!")
 
@@ -482,7 +492,7 @@ def build_linux(deps_dir, dist_dir):
         shutil.copy(lib_src, os.path.join(lib_dest_dir, "libwebrtc_audio_processing.a"))
         absl_build_dir = os.path.join(build_dir, "abseil-cpp")
         if os.path.exists(absl_build_dir):
-            copy_static_libs(absl_build_dir, lib_dest_dir)
+            copy_static_libs(absl_build_dir, lib_dest_dir, config=config)
         
     print("Linux WebRTC build successful for all configurations!")
 
@@ -571,7 +581,7 @@ def build_osx(deps_dir, dist_dir):
         shutil.copy(lib_src, os.path.join(lib_dest_dir, "libwebrtc_audio_processing.a"))
         absl_build_dir = os.path.join(build_dir, "abseil-cpp")
         if os.path.exists(absl_build_dir):
-            copy_static_libs(absl_build_dir, lib_dest_dir)
+            copy_static_libs(absl_build_dir, lib_dest_dir, config=config)
         
     print("OSX WebRTC build successful for all configurations!")
 
@@ -665,7 +675,7 @@ def build_ios(deps_dir, dist_dir):
         shutil.copy(lib_src, os.path.join(lib_dest_dir, "libwebrtc_audio_processing.a"))
         absl_build_dir = os.path.join(build_dir, "abseil-cpp")
         if os.path.exists(absl_build_dir):
-            copy_static_libs(absl_build_dir, lib_dest_dir)
+            copy_static_libs(absl_build_dir, lib_dest_dir, config=config)
         
     print("iOS WebRTC build successful for all configurations!")
 
@@ -794,7 +804,7 @@ def build_android(deps_dir, dist_dir, ndk_path=None):
             shutil.copy(lib_src, os.path.join(lib_dest_dir, "libwebrtc_audio_processing.a"))
             absl_build_dir = os.path.join(build_dir, "abseil-cpp")
             if os.path.exists(absl_build_dir):
-                copy_static_libs(absl_build_dir, lib_dest_dir)
+                copy_static_libs(absl_build_dir, lib_dest_dir, config=config)
             
     print("Android WebRTC build successful for all ABIs and configurations!")
 
