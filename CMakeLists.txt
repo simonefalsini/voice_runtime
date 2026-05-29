@@ -28,6 +28,23 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/libraries/cmake")
 option(VOICE_RUNTIME_ENABLE_REAL_AUDIO "Build real miniaudio mic/output nodes" OFF)
 option(VOICE_RUNTIME_ENABLE_WEBRTC_APM "Build WebRTC APM DSP node"            OFF)
 option(VOICE_RUNTIME_BUILD_TESTS       "Build individual node test programs"   ON)
+option(VOICE_RUNTIME_ENABLE_WASAPI     "Build Windows-native WASAPI mic/output nodes (Windows only)" OFF)
+
+# ---------------------------------------------------------------------------
+# Windows WASAPI — native audio nodes (WasapiMicNode, WasapiOutputNode)
+# ---------------------------------------------------------------------------
+if(WIN32 AND VOICE_RUNTIME_ENABLE_WASAPI)
+    # ole32 / oleaut32 are already linked via #pragma comment in the headers,
+    # but we add them here explicitly for non-MSVC toolchains (MinGW, Clang-CL).
+    set(WASAPI_SYSTEM_LIBS ole32 oleaut32 ksuser)
+    add_compile_definitions(VOICE_RUNTIME_ENABLE_WASAPI=1)
+    message(STATUS "WASAPI Windows audio nodes: ENABLED")
+elseif(VOICE_RUNTIME_ENABLE_WASAPI AND NOT WIN32)
+    message(WARNING "VOICE_RUNTIME_ENABLE_WASAPI is ON but the target is not Windows — ignored")
+    set(WASAPI_SYSTEM_LIBS "")
+else()
+    set(WASAPI_SYSTEM_LIBS "")
+endif()
 
 # ---------------------------------------------------------------------------
 # Find all libraries from our local libraries/ directory
@@ -254,6 +271,24 @@ if(VOICE_RUNTIME_BUILD_TESTS)
         endif()
     endif()
 
+    # --- Test: WASAPI Mic (Windows only) ---
+    if(WIN32 AND VOICE_RUNTIME_ENABLE_WASAPI)
+        add_executable(test_wasapi_mic tests/test_wasapi_mic.cpp)
+        target_include_directories(test_wasapi_mic PRIVATE ${VOICE_RUNTIME_INCLUDES})
+        target_link_libraries(test_wasapi_mic PRIVATE
+            ${WASAPI_SYSTEM_LIBS}
+            ${PLATFORM_THREAD_LIBS}
+        )
+
+        # --- Test: WASAPI Output (Windows only) ---
+        add_executable(test_wasapi_output tests/test_wasapi_output.cpp)
+        target_include_directories(test_wasapi_output PRIVATE ${VOICE_RUNTIME_INCLUDES})
+        target_link_libraries(test_wasapi_output PRIVATE
+            ${WASAPI_SYSTEM_LIBS}
+            ${PLATFORM_THREAD_LIBS}
+        )
+    endif()
+
 endif()
 
 # ===========================================================================
@@ -360,6 +395,11 @@ endif()
 if(VOICE_RUNTIME_ENABLE_WEBRTC_APM AND TARGET WebRtcAudioProcessing::WebRtcAudioProcessing)
     target_link_libraries(test_aec_transcription PRIVATE
         WebRtcAudioProcessing::WebRtcAudioProcessing)
+endif()
+
+# WASAPI system libs for test_aec_transcription on Windows
+if(WIN32 AND VOICE_RUNTIME_ENABLE_WASAPI)
+    target_link_libraries(test_aec_transcription PRIVATE ${WASAPI_SYSTEM_LIBS})
 endif()
 
 # ===========================================================================

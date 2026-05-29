@@ -238,7 +238,12 @@ protected:
                 if (spkOut_) spkOut_->clear();
             }
 
-            // Mark TTS active
+            // FIX Bug4: Mark TTS active BEFORE any frame is pushed onto the queues.
+            // The WebRtcDspNode reads ttsState_ atomically in its runLoop. By setting
+            // the signal here — after clearing stale data but before pushFrames() —
+            // we guarantee the DSP sees ttsActive=true before the first reference
+            // frame arrives, preventing a window where reference frames are consumed
+            // without AEC being enabled.
             if (ttsState_) ttsState_->setActive(true);
 
             // Segment and push frames

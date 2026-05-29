@@ -210,8 +210,13 @@ int main(int argc, char* argv[]) {
     AudioFrameQueue cleanQueue(512, QueueOverflowPolicy::DropOldest, "cleanQueue");
     // VAD events (for display)
     VadEventQueue vadEventQueue(64, QueueOverflowPolicy::DropOldest, "vadEvents");
-    // TTS → AEC (render reference, 16kHz)
-    AudioFrameQueue aecRefQueue(256, QueueOverflowPolicy::BlockProducer, "aecRefQueue");
+    // TTS → AEC (render reference, 16kHz).
+    // FIX Bug3: capacity reduced from 256 to 32 frames (320ms @ 10ms/frame).
+    // A large capacity allows the TTS to pre-fill the queue with seconds of
+    // reference audio ahead of playback, creating an offset the static
+    // estimatedRenderDelayMs cannot compensate. 32 frames keeps the buffering
+    // within the range of AEC3's internal delay estimator (~300ms).
+    AudioFrameQueue aecRefQueue(32, QueueOverflowPolicy::BlockProducer, "aecRefQueue");
     // TTS → speaker output (24kHz)
     AudioFrameQueue speakerQueue(256, QueueOverflowPolicy::BlockProducer, "speakerQueue");
     // TTS text input
