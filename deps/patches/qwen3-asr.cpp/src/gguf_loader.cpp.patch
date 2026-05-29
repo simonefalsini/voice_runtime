@@ -1,5 +1,5 @@
 diff --git a/src/gguf_loader.cpp b/src/gguf_loader.cpp
-index e37b670..9f6b5b1 100644
+index e37b670..63cad5c 100644
 --- a/src/gguf_loader.cpp
 +++ b/src/gguf_loader.cpp
 @@ -3,10 +3,17 @@
@@ -20,7 +20,59 @@ index e37b670..9f6b5b1 100644
  
  namespace qwen3_asr {
  
-@@ -65,24 +72,53 @@ bool GGUFLoader::parse_hparams(struct gguf_context * ctx, audio_encoder_model &
+@@ -15,40 +22,51 @@ GGUFLoader::GGUFLoader() = default;
+ GGUFLoader::~GGUFLoader() = default;
+ 
+ bool GGUFLoader::load(const std::string & path, audio_encoder_model & model) {
++    std::printf("[Debug] GGUFLoader::load start for %s\n", path.c_str()); std::fflush(stdout);
+     struct ggml_context * meta_ctx = nullptr;
+     struct gguf_init_params params = {
+         /*.no_alloc =*/ true,
+         /*.ctx      =*/ &meta_ctx,
+     };
+     
++    std::printf("[Debug] GGUFLoader::load: calling gguf_init_from_file...\n"); std::fflush(stdout);
+     struct gguf_context * ctx = gguf_init_from_file(path.c_str(), params);
+     if (!ctx) {
+         error_msg_ = "Failed to open GGUF file: " + path;
++        std::printf("[Debug] GGUFLoader::load: gguf_init_from_file failed\n"); std::fflush(stdout);
+         return false;
+     }
+     
++    std::printf("[Debug] GGUFLoader::load: calling parse_hparams...\n"); std::fflush(stdout);
+     if (!parse_hparams(ctx, model)) {
+         gguf_free(ctx);
+         if (meta_ctx) ggml_free(meta_ctx);
++        std::printf("[Debug] GGUFLoader::load: parse_hparams failed\n"); std::fflush(stdout);
+         return false;
+     }
+     
++    std::printf("[Debug] GGUFLoader::load: calling create_tensors...\n"); std::fflush(stdout);
+     if (!create_tensors(ctx, model)) {
+         gguf_free(ctx);
+         if (meta_ctx) ggml_free(meta_ctx);
++        std::printf("[Debug] GGUFLoader::load: create_tensors failed\n"); std::fflush(stdout);
+         return false;
+     }
+     
++    std::printf("[Debug] GGUFLoader::load: calling load_tensor_data...\n"); std::fflush(stdout);
+     if (!load_tensor_data(path, ctx, model)) {
+         free_model(model);
+         gguf_free(ctx);
+         if (meta_ctx) ggml_free(meta_ctx);
++        std::printf("[Debug] GGUFLoader::load: load_tensor_data failed\n"); std::fflush(stdout);
+         return false;
+     }
+     
++    std::printf("[Debug] GGUFLoader::load: freeing gguf context...\n"); std::fflush(stdout);
+     gguf_free(ctx);
+     if (meta_ctx) ggml_free(meta_ctx);
+     
++    std::printf("[Debug] GGUFLoader::load success\n"); std::fflush(stdout);
+     return true;
+ }
+ 
+@@ -65,24 +83,53 @@ bool GGUFLoader::parse_hparams(struct gguf_context * ctx, audio_encoder_model &
          return gguf_get_val_f32(ctx, idx);
      };
      
@@ -89,7 +141,7 @@ index e37b670..9f6b5b1 100644
      
      return true;
  }
-@@ -127,28 +163,33 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+@@ -127,28 +174,33 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
              total_elements = (size * blck_size) / type_size;
          }
          
@@ -130,7 +182,7 @@ index e37b670..9f6b5b1 100644
              ne[0] = model.hparams.d_model;
              n_dims = 1;
          } else if (strstr(name, "ffn_up.weight")) {
-@@ -163,26 +204,31 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+@@ -163,26 +215,31 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
              ne[0] = model.hparams.ffn_dim;
              n_dims = 1;
          } else if (strstr(name, "ffn_down.bias") || strstr(name, "ffn_norm.weight") || 
@@ -168,7 +220,7 @@ index e37b670..9f6b5b1 100644
          } else {
              int64_t remaining = total_elements;
              ne[0] = remaining;
-@@ -197,35 +243,38 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+@@ -197,35 +254,38 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
          ggml_set_name(tensor, name);
          model.tensors[name] = tensor;
          
@@ -222,7 +274,7 @@ index e37b670..9f6b5b1 100644
                  layer_idx >= 0 && layer_idx < model.hparams.n_encoder_layers) {
                  auto & layer = model.layers[layer_idx];
                  
-@@ -235,16 +284,16 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+@@ -235,16 +295,16 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
                  else if (strstr(name, "attn_k.bias")) layer.attn_k_b = tensor;
                  else if (strstr(name, "attn_v.weight")) layer.attn_v_w = tensor;
                  else if (strstr(name, "attn_v.bias")) layer.attn_v_b = tensor;
@@ -245,14 +297,17 @@ index e37b670..9f6b5b1 100644
              }
          }
      }
-@@ -254,6 +303,38 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+@@ -254,6 +314,46 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
  
  bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context * ctx, 
                                     audio_encoder_model & model) {
++    std::printf("[Debug] GGUFLoader::load_tensor_data start\n"); std::fflush(stdout);
 +#if defined(_WIN32)
++    std::printf("[Debug] GGUFLoader::load_tensor_data: calling CreateFileA...\n"); std::fflush(stdout);
 +    HANDLE hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 +    if (hFile == INVALID_HANDLE_VALUE) {
 +        error_msg_ = "Failed to open file for mmap: " + path;
++        std::printf("[Debug] GGUFLoader::load_tensor_data: CreateFileA failed\n"); std::fflush(stdout);
 +        return false;
 +    }
 +    
@@ -260,22 +315,27 @@ index e37b670..9f6b5b1 100644
 +    if (!GetFileSizeEx(hFile, &size)) {
 +        error_msg_ = "Failed to get file size: " + path;
 +        CloseHandle(hFile);
++        std::printf("[Debug] GGUFLoader::load_tensor_data: GetFileSizeEx failed\n"); std::fflush(stdout);
 +        return false;
 +    }
 +    
++    std::printf("[Debug] GGUFLoader::load_tensor_data: calling CreateFileMappingA (size=%lld)...\n", size.QuadPart); std::fflush(stdout);
 +    HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
 +    if (hMapping == NULL) {
 +        error_msg_ = "Failed to create file mapping: " + path;
 +        CloseHandle(hFile);
++        std::printf("[Debug] GGUFLoader::load_tensor_data: CreateFileMappingA failed\n"); std::fflush(stdout);
 +        return false;
 +    }
 +    
++    std::printf("[Debug] GGUFLoader::load_tensor_data: calling MapViewOfFile...\n"); std::fflush(stdout);
 +    void * mmap_addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
 +    CloseHandle(hMapping);
 +    CloseHandle(hFile);
 +    
 +    if (mmap_addr == NULL) {
 +        error_msg_ = "Failed to map view of file: " + path;
++        std::printf("[Debug] GGUFLoader::load_tensor_data: MapViewOfFile failed\n"); std::fflush(stdout);
 +        return false;
 +    }
 +    
@@ -284,7 +344,7 @@ index e37b670..9f6b5b1 100644
      int fd = open(path.c_str(), O_RDONLY);
      if (fd < 0) {
          error_msg_ = "Failed to open file for mmap: " + path;
-@@ -275,11 +356,14 @@ bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context
+@@ -275,11 +375,14 @@ bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context
          return false;
      }
      
@@ -301,7 +361,30 @@ index e37b670..9f6b5b1 100644
      uint8_t * data_base = (uint8_t *)mmap_addr + data_offset;
      
      // Find largest tensor for max_tensor_size hint
-@@ -300,7 +384,11 @@ bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context
+@@ -290,22 +393,40 @@ bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context
+         if (sz > max_tensor_size) max_tensor_size = sz;
+     }
+ 
++    std::printf("[Debug] GGUFLoader::load_tensor_data: checking GPU device...\n"); std::fflush(stdout);
+     // Try GPU device buffer (zero-copy on Apple Silicon unified memory)
+     ggml_backend_dev_t gpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
++    std::printf("[Debug] GGUFLoader::load_tensor_data: gpu_dev is %p\n", (void*)gpu_dev); std::fflush(stdout);
+     if (gpu_dev) {
+-        model.buffer = ggml_backend_dev_buffer_from_host_ptr(gpu_dev, data_base, total_size, max_tensor_size);
++        ggml_backend_dev_props props;
++        ggml_backend_dev_get_props(gpu_dev, &props);
++        if (props.caps.buffer_from_host_ptr) {
++            std::printf("[Debug] GGUFLoader::load_tensor_data: calling ggml_backend_dev_buffer_from_host_ptr...\n"); std::fflush(stdout);
++            model.buffer = ggml_backend_dev_buffer_from_host_ptr(gpu_dev, data_base, total_size, max_tensor_size);
++            std::printf("[Debug] GGUFLoader::load_tensor_data: gpu buffer is %p\n", (void*)model.buffer); std::fflush(stdout);
++        } else {
++            std::printf("[Debug] GGUFLoader::load_tensor_data: GPU device does not support buffer_from_host_ptr\n"); std::fflush(stdout);
++        }
+     }
+     if (!model.buffer) {
++        std::printf("[Debug] GGUFLoader::load_tensor_data: calling ggml_backend_cpu_buffer_from_ptr...\n"); std::fflush(stdout);
+         model.buffer = ggml_backend_cpu_buffer_from_ptr(data_base, total_size);
++        std::printf("[Debug] GGUFLoader::load_tensor_data: cpu buffer is %p\n", (void*)model.buffer); std::fflush(stdout);
      }
      if (!model.buffer) {
          error_msg_ = "Failed to create buffer from mmap";
@@ -313,8 +396,23 @@ index e37b670..9f6b5b1 100644
 +#endif
          model.mmap_addr = nullptr;
          model.mmap_size = 0;
++        std::printf("[Debug] GGUFLoader::load_tensor_data: failed to create any buffer\n"); std::fflush(stdout);
          return false;
-@@ -331,7 +419,11 @@ void free_model(audio_encoder_model & model) {
+     }
+     
++    std::printf("[Debug] GGUFLoader::load_tensor_data: setting tensor buffers...\n"); std::fflush(stdout);
+     for (int64_t i = 0; i < n_tensors; ++i) {
+         const char * name = gguf_get_tensor_name(ctx, i);
+         size_t offset = gguf_get_tensor_offset(ctx, i);
+@@ -318,6 +439,7 @@ bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context
+         tensor->data = data_base + offset;
+     }
+     
++    std::printf("[Debug] GGUFLoader::load_tensor_data success\n"); std::fflush(stdout);
+     return true;
+ }
+ 
+@@ -331,7 +453,11 @@ void free_model(audio_encoder_model & model) {
          model.ctx = nullptr;
      }
      if (model.mmap_addr) {

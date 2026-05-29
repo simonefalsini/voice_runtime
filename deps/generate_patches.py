@@ -4,10 +4,10 @@ import json
 from datetime import datetime
 
 def run_cmd(cmd, cwd=None):
-    res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    res = subprocess.run(cmd, cwd=cwd, capture_output=True)
     if res.returncode != 0:
         return None
-    return res.stdout.strip()
+    return res.stdout.decode("utf-8", errors="replace").strip()
 
 def main():
     deps_dir = os.path.dirname(os.path.abspath(__file__))

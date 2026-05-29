@@ -1,13 +1,13 @@
 # Ignore cloned repositories
-WebRTC/
-abseil-cpp/
-ggml/
-espeak-ng/
-kokoro.cpp/
-qwen3-asr.cpp/
-cpp-httplib/
-json/
-openssl/
+/WebRTC/
+/abseil-cpp/
+/ggml/
+/espeak-ng/
+/kokoro.cpp/
+/qwen3-asr.cpp/
+/cpp-httplib/
+/json/
+/openssl/
 
 # Ignore build directories
 build_*/

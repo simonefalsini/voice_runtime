@@ -52,6 +52,7 @@ set(COMMON_AUDIO_SOURCES
     WebRTC/common_audio/signal_processing/resample_by_2_internal.c
     WebRTC/common_audio/signal_processing/resample_fractional.c
     WebRTC/common_audio/signal_processing/spl_init.c
+    WebRTC/common_audio/signal_processing/spl_inl.c
     WebRTC/common_audio/signal_processing/spl_sqrt.c
     WebRTC/common_audio/signal_processing/splitting_filter.c
     WebRTC/common_audio/signal_processing/sqrt_of_one_minus_x_squared.c

@@ -32,12 +32,17 @@ inline void setCurrentThreadName(const char* name) {
 #elif defined(__linux__) || defined(__ANDROID__)
     pthread_setname_np(pthread_self(), name);
 #elif defined(_WIN32)
-    // SetThreadDescription richiede Windows 10 1607+
-    int len = MultiByteToWideChar(CP_UTF8, 0, name, -1, nullptr, 0);
-    if (len > 0) {
-        std::wstring wname(static_cast<std::size_t>(len), L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, name, -1, wname.data(), len);
-        SetThreadDescription(GetCurrentThread(), wname.c_str());
+    // SetThreadDescription is Windows 10 1607+, dynamic load prevents compiler issues under old MinGW
+    typedef HRESULT(WINAPI* SetThreadDescription_t)(HANDLE, PCWSTR);
+    auto pSetThreadDescription = reinterpret_cast<SetThreadDescription_t>(
+        GetProcAddress(GetModuleHandleA("kernel32.dll"), "SetThreadDescription"));
+    if (pSetThreadDescription) {
+        int len = MultiByteToWideChar(CP_UTF8, 0, name, -1, nullptr, 0);
+        if (len > 0) {
+            std::wstring wname(static_cast<std::size_t>(len), L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, name, -1, wname.data(), len);
+            pSetThreadDescription(GetCurrentThread(), wname.c_str());
+        }
     }
 #endif
 }

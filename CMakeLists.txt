@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(voice_runtime LANGUAGES C CXX)
 
+if(WIN32)
+    add_compile_definitions(_WIN32_WINNT=0x0A00 NOMINMAX _USE_MATH_DEFINES)
+endif()
+
 # Default build type to Release — our Find modules set per-config
 # IMPORTED_LOCATION_RELEASE so a build type must be set for resolution.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -50,6 +54,10 @@ endif()
 # Find all libraries from our local libraries/ directory
 # ---------------------------------------------------------------------------
 find_package(Ggml)
+if(TARGET Ggml::ggml-cuda)
+    find_package(CUDAToolkit REQUIRED)
+    target_link_libraries(Ggml::Ggml INTERFACE CUDA::cudart CUDA::cublas CUDA::cublasLt CUDA::cuda_driver)
+endif()
 find_package(Qwen3Asr)
 find_package(Kokoro)
 find_package(EspeakNg)

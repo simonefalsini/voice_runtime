@@ -26,6 +26,10 @@ def copy_static_libs(build_dir, dest_dir, target_names=None):
             continue
         for file in files:
             if file.endswith('.lib') or file.endswith('.a'):
+                # Special check for espeak-ng on Windows to avoid copying the executable import library
+                if file == "espeak-ng.lib" and "libespeak-ng" not in root.lower():
+                    continue
+                
                 base = os.path.splitext(file)[0]
                 if base.startswith('lib') and base != 'lib':
                     base_no_prefix = base[3:]
@@ -966,6 +970,11 @@ if(NOT TARGET WebRtcAudioProcessing::WebRtcAudioProcessing)
             INTERFACE_LINK_LIBRARIES "-framework CoreFoundation" "-framework Foundation"
         )
     endif()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        set_property(TARGET WebRtcAudioProcessing::WebRtcAudioProcessing APPEND PROPERTY
+            INTERFACE_LINK_LIBRARIES "winmm"
+        )
+    endif()
 
     # Debug config
     set(LIB_DEBUG "${CMAKE_CURRENT_LIST_DIR}/../lib/webrtc_audio_processing/${PLATFORM_DIR}/Debug/${LIB_PREFIX}webrtc_audio_processing${LIB_SUFFIX}")
@@ -1105,6 +1114,7 @@ if(NOT TARGET EspeakNg::EspeakNg)
     add_library(EspeakNg::EspeakNg INTERFACE IMPORTED GLOBAL)
     set_target_properties(EspeakNg::EspeakNg PROPERTIES
         INTERFACE_INCLUDE_DIRECTORIES "${ESPEAK_INCLUDE_DIR}"
+        INTERFACE_COMPILE_DEFINITIONS "ESPEAK_NG_STATIC"
     )
 
     foreach(config IN ITEMS DEBUG RELEASE)

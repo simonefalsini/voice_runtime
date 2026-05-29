@@ -1,8 +1,20 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 9e322f9..9183fd6 100644
+index 9e322f9..770d03b 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -33,18 +33,20 @@ if (MSVC)
+@@ -11,10 +11,7 @@ if (MSVC)
+     add_compile_options("/utf-8")
+     add_compile_options("/EHsc")
+     
+-    # 使用静态链接的多线程运行时库
+-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT")
+-    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /MTd")
++
+     
+     # 禁用弃用警告
+     add_compile_definitions(_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS)
+@@ -33,18 +30,20 @@ if (MSVC)
  endif()
  
  # ONNX Runtime Configuration
