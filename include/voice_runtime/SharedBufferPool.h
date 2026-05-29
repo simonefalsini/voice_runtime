@@ -68,7 +68,7 @@ public:
             return state->stopped || !state->free.empty();
         });
         if (!ok || state->stopped || state->free.empty()) {
-            ++state->stats.dropped;
+            ++state->stats.timeouts;
             return {};
         }
         return makeHandle(popAndStat(*state), state);

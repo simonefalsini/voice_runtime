@@ -111,41 +111,53 @@ protected:
     }
 
 private:
+    void initScratchBuffers() {
+        if (scratchInitialized_) return;
+        const int srcFrames = sourceFormat_.samplesPerChannelPerFrame();
+        const int srcTotal  = sourceFormat_.totalSamplesPerFrame();
+        const int dstFrames = targetFormat_.samplesPerChannelPerFrame();
+
+        scratchMonoSrc_.resize(static_cast<std::size_t>(srcFrames));
+        scratchTempI16_.resize(static_cast<std::size_t>(srcTotal));
+        scratchResampled_.resize(static_cast<std::size_t>(dstFrames));
+        scratchInitialized_ = true;
+    }
+
     void convertFrame(const AudioFrame& src, AudioFrame& dst) {
-        // 1. Sorgente → Int16 mono (buffer intermedio sul thread stack)
+        initScratchBuffers();
+
+        // 1. Sorgente → Int16 mono (using preallocated scratch buffers)
         const int srcTotalSamples = src.format.totalSamplesPerFrame();
         const int srcFrames       = src.format.samplesPerChannelPerFrame();
 
-        // Temporaneo monoI16 sorgente
-        std::vector<int16_t> monoSrc(static_cast<std::size_t>(srcFrames));
-
         if (src.format.sampleFormat == SampleFormat::Float32) {
             // Float32 → Int16
-            std::vector<int16_t> tempI16(static_cast<std::size_t>(srcTotalSamples));
-            detail::f32ToI16(src.pcmF32.data(), tempI16.data(), srcTotalSamples);
+            detail::f32ToI16(src.pcmF32.data(), scratchTempI16_.data(), srcTotalSamples);
 
             if (src.format.channels == 2)
-                detail::stereoToMonoI16(tempI16.data(), monoSrc.data(), srcFrames);
+                detail::stereoToMonoI16(scratchTempI16_.data(), scratchMonoSrc_.data(), srcFrames);
             else
-                monoSrc = tempI16;
+                std::memcpy(scratchMonoSrc_.data(), scratchTempI16_.data(),
+                            static_cast<std::size_t>(srcFrames) * sizeof(int16_t));
         } else {
             if (src.format.channels == 2)
-                detail::stereoToMonoI16(src.pcm16.data(), monoSrc.data(), srcFrames);
+                detail::stereoToMonoI16(src.pcm16.data(), scratchMonoSrc_.data(), srcFrames);
             else
-                monoSrc = src.pcm16;
+                std::memcpy(scratchMonoSrc_.data(), src.pcm16.data(),
+                            static_cast<std::size_t>(srcFrames) * sizeof(int16_t));
         }
 
         // 2. Resample
         const int dstFrames = dst.format.samplesPerChannelPerFrame();
-        std::vector<int16_t> resampled(static_cast<std::size_t>(dstFrames));
-        detail::resampleLinear(monoSrc.data(), srcFrames, resampled.data(), dstFrames);
+        detail::resampleLinear(scratchMonoSrc_.data(), srcFrames, scratchResampled_.data(), dstFrames);
 
         // 3. Destinazione formato finale
         if (dst.format.sampleFormat == SampleFormat::Int16) {
-            dst.pcm16 = std::move(resampled);
+            std::memcpy(dst.pcm16.data(), scratchResampled_.data(),
+                        static_cast<std::size_t>(dstFrames) * sizeof(int16_t));
         } else {
             dst.pcmF32.resize(static_cast<std::size_t>(dstFrames));
-            detail::i16ToF32(resampled.data(), dst.pcmF32.data(), dstFrames);
+            detail::i16ToF32(scratchResampled_.data(), dst.pcmF32.data(), dstFrames);
         }
     }
 
@@ -156,6 +168,13 @@ private:
     AudioFrameQueue* in_  = nullptr;
     AudioFrameQueue* out_ = nullptr;
     SharedBufferPool<AudioFrame> pool_;
+
+    // Preallocated scratch buffers — sized once, reused per frame
+    bool scratchInitialized_ = false;
+    std::vector<int16_t> scratchMonoSrc_;
+    std::vector<int16_t> scratchTempI16_;
+    std::vector<int16_t> scratchResampled_;
 };
 
 } // namespace voice_runtime
+

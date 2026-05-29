@@ -125,6 +125,24 @@ public:
     }
 
     // -----------------------------------------------------------------------
+    // popWithTimeout — blocks up to `timeout`; returns false on timeout/stop
+    // -----------------------------------------------------------------------
+
+    bool popWithTimeout(T& out, std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lk(mutex_);
+        const bool ok = notEmpty_.wait_for(lk, timeout, [&] {
+            return !queue_.empty() || stopped_;
+        });
+        if (!ok || queue_.empty()) return false;
+        out = std::move(queue_.front());
+        queue_.pop_front();
+        ++stats_.consumed;
+        lk.unlock();
+        notFull_.notify_one();
+        return true;
+    }
+
+    // -----------------------------------------------------------------------
     // Controllo ciclo di vita
     // -----------------------------------------------------------------------
 

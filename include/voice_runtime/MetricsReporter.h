@@ -60,6 +60,7 @@ public:
 
     void stop() {
         running_.store(false);
+        extraLine_ = nullptr;  // Clear callback before joining to avoid dangling refs
         cv_.notify_all();
         if (thread_.joinable()) thread_.join();
     }

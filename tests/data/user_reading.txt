@@ -1,0 +1,10 @@
+La tecnologia di riconoscimento vocale ha fatto enormi progressi negli ultimi anni.
+I sistemi moderni possono trascrivere la voce umana con una precisione sorprendente.
+L'eliminazione dell'eco acustico è fondamentale per gli assistenti vocali.
+Senza un buon sistema di cancellazione dell'eco, il microfono cattura anche l'audio degli altoparlanti.
+Questo test verifica che la trascrizione funzioni correttamente anche durante la riproduzione audio.
+La tecnologia di riconoscimento vocale ha fatto enormi progressi negli ultimi anni.
+I sistemi moderni possono trascrivere la voce umana con una precisione sorprendente.
+L'eliminazione dell'eco acustico è fondamentale per gli assistenti vocali.
+Senza un buon sistema di cancellazione dell'eco, il microfono cattura anche l'audio degli altoparlanti.
+Questo test verifica che la trascrizione funzioni correttamente anche durante la riproduzione audio.

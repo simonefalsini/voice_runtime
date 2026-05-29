@@ -10,4 +10,6 @@
     - [x] Compile and package `qwen3-asr.cpp` (linking to main GGML static libraries with GPU backends)
     - [x] Export header files for `espeak-ng`, `kokoro`, and `qwen3-asr`
 - [x] Run Windows build for validation and verify output libraries and headers
+- [x] Run macOS (OSX) build for validation and verify output libraries and headers
+- [x] Run iOS build for validation and verify output libraries and headers
 - [x] Create walkthrough documenting changes and results

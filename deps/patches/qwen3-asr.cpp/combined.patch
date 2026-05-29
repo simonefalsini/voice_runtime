@@ -1,8 +1,17 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index caa85be..1400dde 100644
+index caa85be..27a8826 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -22,8 +22,53 @@ endif()
+@@ -18,12 +18,72 @@ if(QWEN3_ASR_TIMING)
+     add_compile_definitions(QWEN3_ASR_TIMING)
+ endif()
+ 
++option(QWEN3_ASR_BUILD_TESTS_AND_CLI "Build tests and CLI executables" ON)
++if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "Android")
++    set(QWEN3_ASR_BUILD_TESTS_AND_CLI OFF)
++endif()
++
+ # Find threads
  find_package(Threads REQUIRED)
  
  # GGML library paths
@@ -25,6 +34,7 @@ index caa85be..1400dde 100644
 +find_library(GGML_CUDA_LIB ggml-cuda HINTS ${GGML_BUILD_DIR}/src/ggml-cuda ${GGML_BUILD_DIR}/src/ggml-cuda/Release ${GGML_BUILD_DIR}/src/ggml-cuda/Debug)
 +find_library(GGML_METAL_LIB ggml-metal HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
 +find_library(GGML_VULKAN_LIB ggml-vulkan HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_BLAS_LIB ggml-blas HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
 +
 +set(GGML_LIBS ${GGML_LIB} ${GGML_BASE_LIB} ${GGML_CPU_LIB})
 +if(GGML_CUDA_LIB)
@@ -53,12 +63,21 @@ index caa85be..1400dde 100644
 +        message(STATUS "Linked Vulkan library: ${VULKAN_LIB}")
 +    endif()
 +endif()
++if(GGML_BLAS_LIB)
++    list(APPEND GGML_LIBS ${GGML_BLAS_LIB})
++    message(STATUS "Found GGML BLAS library: ${GGML_BLAS_LIB}")
++endif()
++
++if(APPLE)
++    list(APPEND GGML_LIBS "-framework Accelerate")
++    message(STATUS "Linked Apple Accelerate framework")
++endif()
 +
 +message(STATUS "GGML libraries: ${GGML_LIBS}")
  
  # Mel spectrogram library
  add_library(mel_spectrogram STATIC
-@@ -52,13 +97,8 @@ target_include_directories(audio_encoder PUBLIC
+@@ -52,13 +112,8 @@ target_include_directories(audio_encoder PUBLIC
      ${CMAKE_CURRENT_SOURCE_DIR}/src
      ${GGML_DIR}/include
  )
@@ -73,7 +92,7 @@ index caa85be..1400dde 100644
      Threads::Threads
  )
  
-@@ -70,13 +110,8 @@ target_include_directories(text_decoder PUBLIC
+@@ -70,13 +125,8 @@ target_include_directories(text_decoder PUBLIC
      ${CMAKE_CURRENT_SOURCE_DIR}/src
      ${GGML_DIR}/include
  )
@@ -88,7 +107,7 @@ index caa85be..1400dde 100644
      Threads::Threads
  )
  
-@@ -112,14 +147,9 @@ target_include_directories(forced_aligner PUBLIC
+@@ -112,17 +162,13 @@ target_include_directories(forced_aligner PUBLIC
      ${CMAKE_CURRENT_SOURCE_DIR}/src
      ${GGML_DIR}/include
  )
@@ -104,7 +123,11 @@ index caa85be..1400dde 100644
      Threads::Threads
  )
  
-@@ -183,13 +213,8 @@ add_executable(test_embedding
++if(QWEN3_ASR_BUILD_TESTS_AND_CLI)
+ # CLI executable
+ add_executable(qwen3-asr-cli
+     src/main.cpp
+@@ -183,13 +229,8 @@ add_executable(test_embedding
  target_include_directories(test_embedding PRIVATE
      ${GGML_DIR}/include
  )
@@ -119,12 +142,93 @@ index caa85be..1400dde 100644
      Threads::Threads
  )
  
-diff --git a/ggml b/ggml
---- a/ggml
-+++ b/ggml
-@@ -1 +1 @@
--Subproject commit a8db410a252c8c8f2d120c6f2e7133ebe032f35d
-+Subproject commit a8db410a252c8c8f2d120c6f2e7133ebe032f35d-dirty
+@@ -273,43 +314,53 @@ target_link_libraries(test_encoder_no_chunk PRIVATE
+     audio_encoder
+     Threads::Threads
+ )
++endif()
+ 
+ # Install targets
+-install(TARGETS mel_spectrogram audio_encoder text_decoder audio_injection qwen3_asr forced_aligner qwen3-asr-cli
+-    ARCHIVE DESTINATION lib
+-    RUNTIME DESTINATION bin
+-)
++if(QWEN3_ASR_BUILD_TESTS_AND_CLI)
++    install(TARGETS mel_spectrogram audio_encoder text_decoder audio_injection qwen3_asr forced_aligner qwen3-asr-cli
++        ARCHIVE DESTINATION lib
++        RUNTIME DESTINATION bin
++        BUNDLE DESTINATION bin
++    )
++else()
++    install(TARGETS mel_spectrogram audio_encoder text_decoder audio_injection qwen3_asr forced_aligner
++        ARCHIVE DESTINATION lib
++    )
++endif()
+ install(FILES src/mel_spectrogram.h src/audio_encoder.h src/gguf_loader.h src/text_decoder.h src/audio_injection.h src/qwen3_asr.h src/forced_aligner.h
+     DESTINATION include
+ )
+ 
+-# CTest support
+-enable_testing()
+-add_test(NAME mel_spectrogram_test
+-    COMMAND test_mel
+-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+-)
+-add_test(NAME audio_encoder_test
+-    COMMAND test_encoder
+-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+-)
+-add_test(NAME text_decoder_test
+-    COMMAND test_decoder
+-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+-)
+-add_test(NAME audio_injection_test
+-    COMMAND test_injection
+-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+-)
++if(QWEN3_ASR_BUILD_TESTS_AND_CLI)
++    # CTest support
++    enable_testing()
++    add_test(NAME mel_spectrogram_test
++        COMMAND test_mel
++        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
++    )
++    add_test(NAME audio_encoder_test
++        COMMAND test_encoder
++        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
++    )
++    add_test(NAME text_decoder_test
++        COMMAND test_decoder
++        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
++    )
++    add_test(NAME audio_injection_test
++        COMMAND test_injection
++        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
++    )
+ 
+-# Test conv1 output
+-add_executable(test_conv1
+-    tests/test_conv1.cpp
+-)
+-target_include_directories(test_conv1 PRIVATE
+-    ${GGML_DIR}/include
+-)
+-target_link_libraries(test_conv1 PRIVATE
+-    audio_encoder
+-    Threads::Threads
+-)
++    # Test conv1 output
++    add_executable(test_conv1
++        tests/test_conv1.cpp
++    )
++    target_include_directories(test_conv1 PRIVATE
++        ${GGML_DIR}/include
++    )
++    target_link_libraries(test_conv1 PRIVATE
++        audio_encoder
++        Threads::Threads
++    )
++endif()
 diff --git a/src/audio_encoder.cpp b/src/audio_encoder.cpp
 index 682e9fb..a9b3928 100644
 --- a/src/audio_encoder.cpp

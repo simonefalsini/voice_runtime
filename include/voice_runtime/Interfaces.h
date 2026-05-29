@@ -6,8 +6,11 @@
 #include "AudioTypes.h"
 #include "BoundedQueue.h"
 #include "TextBuffer.h"
+#include <mutex>
 
 namespace voice_runtime {
+
+inline std::mutex g_ggml_mutex;
 
 // ---------------------------------------------------------------------------
 // Queue type aliases
@@ -65,6 +68,9 @@ public:
 
     // Livello di confidenza minimo per considerare un frame come speech [0,1]
     virtual void setSpeechThreshold(float threshold)         = 0;
+
+    // Quando il TTS è attivo, il VAD opera in pass-through (no gating)
+    virtual void setTtsStateSignal(const TtsStateSignal* signal) { (void)signal; }
 };
 
 // ---------------------------------------------------------------------------
@@ -82,6 +88,9 @@ public:
     virtual void setVadEventQueue(VadEventQueue* events)         { (void)events; }
     virtual void setSpeechThreshold(float threshold)             { (void)threshold; }
     virtual bool isSpeaking() const                              { return false; }
+
+    // Quando il TTS è attivo, l'AEC processa; quando inattivo, pass-through
+    virtual void setTtsStateSignal(const TtsStateSignal* signal) { (void)signal; }
 };
 
 // ---------------------------------------------------------------------------
@@ -95,21 +104,23 @@ public:
 };
 
 // ---------------------------------------------------------------------------
-// IBargeInContextNode
-//   Analizza il testo STT in ingresso e decide se triggare un interrupt.
-//   Supporta anche interrupt manuale esterno (es. tastiera).
+// IClassifierBargeInNode
+//   Quando TTS inattivo: pass-through (forwarda testo a LLM, nessun barge-in)
+//   Quando TTS attivo: classifica intent (stop→barge-in, commento→buffer)
 // ---------------------------------------------------------------------------
 
-class IBargeInContextNode : public virtual IActiveNode {
+class IClassifierBargeInNode : public virtual IActiveNode {
 public:
-    virtual void setTextInputQueue(TextQueue* sttText)           = 0;
-    virtual void setTextOutputQueue(TextQueue* llmText)          = 0;
-    virtual void setBargeInEventQueue(BargeInQueue* events)      = 0;
-    virtual void setTtsInterruptSignal(InterruptSignal* signal)  = 0;
-    virtual void setLlmInterruptSignal(InterruptSignal* signal)  = 0;
+    virtual void setTextInputQueue(TextQueue* sttText)            = 0;
+    virtual void setTextOutputQueue(TextQueue* llmText)           = 0;
+    virtual void setBargeInEventQueue(BargeInQueue* events)       = 0;
+    virtual void setTtsInterruptSignal(InterruptSignal* signal)   = 0;
+    virtual void setLlmInterruptSignal(InterruptSignal* signal)   = 0;
+    virtual void setTtsStateSignal(const TtsStateSignal* signal)  = 0;
+    virtual void setOverlapBuffer(RollingTextBuffer* buf)         = 0;
 
-    // Trigger manuale (tastiera, UI, test)
-    virtual void triggerManualBargeIn()                          = 0;
+    // Barge-in manuale (tastiera, UI) — attivo solo durante TTS
+    virtual void triggerManualBargeIn()                            = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -125,6 +136,18 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// IInterpreterNode
+//   Decodifica output LLM ed estrae solo il testo da leggere ad alta voce.
+//   Filtra metadata, comandi, istruzioni interne.
+// ---------------------------------------------------------------------------
+
+class IInterpreterNode : public virtual IActiveNode {
+public:
+    virtual void setInputQueue(TextQueue* llmOutput)   = 0;
+    virtual void setOutputQueue(TextQueue* ttsInput)    = 0;
+};
+
+// ---------------------------------------------------------------------------
 // ITextToSpeechNode
 // ---------------------------------------------------------------------------
 
@@ -134,6 +157,7 @@ public:
     virtual void setSpeakerOutputQueue(AudioFrameQueue* speakerOut)        = 0;
     virtual void setAecReferenceOutputQueue(AudioFrameQueue* aecRefOut)    = 0;
     virtual void setInterruptSignal(InterruptSignal* signal)               = 0;
+    virtual void setTtsStateSignal(TtsStateSignal* signal)              = 0;
 };
 
 } // namespace voice_runtime

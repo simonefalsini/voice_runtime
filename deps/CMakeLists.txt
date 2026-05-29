@@ -69,6 +69,7 @@ set(COMMON_AUDIO_SOURCES
     WebRTC/common_audio/fir_filter_c.cc
     WebRTC/common_audio/fir_filter_factory.cc
     WebRTC/common_audio/third_party/ooura/fft_size_256/fft4g.cc
+    WebRTC/common_audio/third_party/ooura/fft_size_128/ooura_fft.cc
     WebRTC/common_audio/third_party/spl_sqrt_floor/spl_sqrt_floor.c
 )
 
@@ -86,6 +87,7 @@ set(API_AUDIO_SOURCES
     WebRTC/api/audio/echo_canceller3_config.cc
     WebRTC/api/audio/echo_canceller3_factory.cc
     WebRTC/api/audio/echo_detector_creator.cc
+    WebRTC/api/rtc_event_log/rtc_event_log.cc
 )
 
 set(API_UNITS_SOURCES
@@ -99,6 +101,7 @@ set(API_UNITS_SOURCES
 set(API_ENV_SOURCES
     WebRTC/api/environment/environment_factory.cc
     WebRTC/api/environment/deprecated_global_field_trials.cc
+    WebRTC/api/field_trials_registry.cc
 )
 
 set(API_TQ_SOURCES
@@ -108,6 +111,10 @@ set(API_TQ_SOURCES
 
 set(RTC_BASE_SOURCES
     WebRTC/rtc_base/checks.cc
+    WebRTC/rtc_base/memory/aligned_malloc.cc
+    WebRTC/rtc_base/race_checker.cc
+    WebRTC/rtc_base/ref_counter.cc
+    WebRTC/rtc_base/event.cc
     WebRTC/rtc_base/logging.cc
     WebRTC/rtc_base/time_utils.cc
     WebRTC/rtc_base/platform_thread.cc
@@ -122,8 +129,12 @@ set(RTC_BASE_SOURCES
     WebRTC/rtc_base/task_queue_stdlib.cc
     WebRTC/api/task_queue/default_task_queue_factory_stdlib.cc
     WebRTC/api/field_trials.cc
+    WebRTC/rtc_base/experiments/field_trial_parser.cc
     WebRTC/rtc_base/system/file_wrapper.cc
     WebRTC/rtc_base/system/system_time.cc
+    WebRTC/rtc_base/system_time.cc
+    WebRTC/rtc_base/strings/string_builder.cc
+    WebRTC/rtc_base/strings/string_format.cc
     WebRTC/rtc_base/synchronization/sequence_checker_internal.cc
     WebRTC/rtc_base/synchronization/yield.cc
     WebRTC/rtc_base/synchronization/yield_policy.cc
@@ -289,6 +300,10 @@ set(VAD_SOURCES
     WebRTC/modules/audio_processing/vad/vad_audio_proc.cc
     WebRTC/modules/audio_processing/vad/vad_circular_buffer.cc
     WebRTC/modules/audio_processing/vad/voice_activity_detector.cc
+    WebRTC/modules/audio_coding/codecs/isac/main/source/filter_functions.c
+    WebRTC/modules/audio_coding/codecs/isac/main/source/isac_vad.c
+    WebRTC/modules/audio_coding/codecs/isac/main/source/pitch_estimator.c
+    WebRTC/modules/audio_coding/codecs/isac/main/source/pitch_filter.c
 )
 
 set(THIRD_PARTY_SOURCES
@@ -315,6 +330,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "amd64|x86_64|AMD64|x86")
         WebRTC/modules/audio_processing/aec3/matched_filter_avx2.cc
         WebRTC/modules/audio_processing/aec3/vector_math_avx2.cc
         WebRTC/modules/audio_processing/agc2/rnn_vad/vector_math_avx2.cc
+        WebRTC/common_audio/third_party/ooura/fft_size_128/ooura_fft_sse2.cc
     )
     # Enable AVX2 on x86/x64
     if(MSVC)
@@ -333,6 +349,7 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm|armv7|arm64|aarch64|ARM|ARM64")
         WebRTC/common_audio/signal_processing/cross_correlation_neon.c
         WebRTC/common_audio/signal_processing/downsample_fast_neon.c
         WebRTC/common_audio/signal_processing/min_max_operations_neon.c
+        WebRTC/common_audio/third_party/ooura/fft_size_128/ooura_fft_neon.cc
     )
     # On 32-bit ARM, we might need neon compile flags. On 64-bit ARM (arm64/aarch64), Neon is mandatory and compile flags are not needed.
     if(CMAKE_SIZEOF_VOID_P EQUAL 4 AND NOT MSVC)

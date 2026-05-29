@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <initializer_list>
 #include <random>
 #include <set>
@@ -37,6 +38,7 @@ inline uint64_t nowNs() {
 
 // ---------------------------------------------------------------------------
 // SimulatedMicrophoneNode
+//   Generates synthetic audio frames at the configured frame rate.
 // ---------------------------------------------------------------------------
 
 class SimulatedMicrophoneNode final
@@ -84,9 +86,10 @@ private:
 
 // ---------------------------------------------------------------------------
 // SimulatedVadNode
-//   Macchina a stati: Silence ↔ Speaking
-//   Durante Silence i frame vengono scartati (non pushati a valle).
-//   Emette VadEvent::SpeechStart / SpeechEnd con timestamp.
+//   - When TTS is active (ttsState_->isActive()): pass-through mode
+//     → all frames forwarded, NO VadEvents emitted.
+//   - When TTS is inactive: normal VAD behaviour
+//     → energy-based gating with hangover, SpeechStart/SpeechEnd events.
 // ---------------------------------------------------------------------------
 
 class SimulatedVadNode final
@@ -104,6 +107,8 @@ public:
     void setEventQueue(VadEventQueue* ev)          override { evq_ = ev; }
     void setSpeechThreshold(float thr)             override { threshold_ = thr; }
 
+    void setTtsStateSignal(const TtsStateSignal* signal) override { ttsState_ = signal; }
+
     bool isSpeaking() const { return speaking_.load(std::memory_order_acquire); }
 
 protected:
@@ -115,9 +120,16 @@ protected:
             AudioFrameHandle frame;
             if (!in_ || !in_->pop(frame)) break;
 
+            // TTS active → pass-through (no gating, no events)
+            if (ttsState_ && ttsState_->isActive()) {
+                if (out_) out_->push(std::move(frame));
+                continue;
+            }
+
+            // Normal VAD mode
             const uint64_t now = frame->timestampNs;
 
-            // Controlla se è il momento di cambiare stato
+            // Check if it's time to toggle state
             if (now >= nextTransitionNs_) {
                 toggleSpeech(now);
                 scheduleNext();
@@ -126,7 +138,7 @@ protected:
             if (speaking_.load(std::memory_order_acquire)) {
                 if (out_) out_->push(std::move(frame));
             }
-            // Durante il silenzio il frame viene semplicemente rilasciato (pool recycle)
+            // During silence the frame is simply released (pool recycle)
         }
     }
 
@@ -155,7 +167,7 @@ private:
 
     void scheduleNext() {
         const bool currentlySpeaking = speaking_.load();
-        // Silenzio: 500..2000ms   |   Speech: 1000..4000ms
+        // Silence: 500..2000ms   |   Speech: 1000..4000ms
         const int loMs = currentlySpeaking ? 1000 : 500;
         const int hiMs = currentlySpeaking ? 4000 : 2000;
         std::uniform_int_distribution<int> dist(loMs, hiMs);
@@ -164,18 +176,23 @@ private:
         nextTransitionNs_ = nowNs() + durationNs;
     }
 
-    AudioFrameQueue* in_  = nullptr;
-    AudioFrameQueue* out_ = nullptr;
-    VadEventQueue*   evq_ = nullptr;
-    float            threshold_        = 0.5f;
-    std::atomic<bool> speaking_{false};
-    uint64_t         nextTransitionNs_ = 0;
-    uint64_t         startNs_          = 0;
-    std::mt19937     rng_;
+    AudioFrameQueue*       in_  = nullptr;
+    AudioFrameQueue*       out_ = nullptr;
+    VadEventQueue*         evq_ = nullptr;
+    const TtsStateSignal*  ttsState_ = nullptr;
+    float                  threshold_        = 0.5f;
+    std::atomic<bool>      speaking_{false};
+    uint64_t               nextTransitionNs_ = 0;
+    uint64_t               startNs_          = 0;
+    std::mt19937           rng_;
 };
 
 // ---------------------------------------------------------------------------
 // SimulatedAecNode
+//   - When TTS is inactive: pass-through (forward capture frames, zero-copy).
+//   - When TTS is active: process (drain render queue with tryPop, simulate
+//     echo cancellation, allocate from pool).
+//   - Uses tryPop() for render queue — never blocking on reference frames.
 // ---------------------------------------------------------------------------
 
 class SimulatedAecNode final
@@ -193,6 +210,8 @@ public:
     void setRenderInputQueue(AudioFrameQueue* q)  override { refIn_ = q; }
     void setOutputQueue(AudioFrameQueue* q)       override { out_   = q; }
 
+    void setTtsStateSignal(const TtsStateSignal* signal) override { ttsState_ = signal; }
+
 protected:
     void wake() override { pool_.stop(); }
 
@@ -201,16 +220,23 @@ protected:
             AudioFrameHandle mic;
             if (!micIn_ || !micIn_->pop(mic)) break;
 
-            // Consuma un frame di reference se disponibile (senza bloccare)
-            if (refIn_ && refIn_->size() > 0) {
-                AudioFrameHandle ref;
-                refIn_->pop(ref);
-                // In una implementazione reale: AEC3 usa ref per cancellare mic
+            const bool ttsActive = ttsState_ && ttsState_->isActive();
+
+            if (!ttsActive) {
+                // Pass-through: no AEC needed, zero-copy forward
+                mic->sequence = seq_++;
+                if (out_) out_->push(std::move(mic));
+                continue;
             }
 
+            // TTS active → drain all available render/reference frames (non-blocking)
+            drainRenderQueue();
+
+            // Acquire a clean output frame from the pool
             auto clean = pool_.acquireWithTimeout(std::chrono::milliseconds(50));
             if (!clean) { if (!running()) break; continue; }
 
+            // Simulate echo cancellation: copy mic data into clean frame
             *clean           = *mic;
             clean->sequence  = seq_++;
             std::this_thread::sleep_for(std::chrono::milliseconds(processMs_));
@@ -220,16 +246,26 @@ protected:
     }
 
 private:
-    AudioFrameQueue* micIn_ = nullptr;
-    AudioFrameQueue* refIn_ = nullptr;
-    AudioFrameQueue* out_   = nullptr;
-    uint64_t         seq_   = 0;
+    void drainRenderQueue() {
+        AudioFrameHandle ref;
+        while (refIn_ && refIn_->tryPop(ref)) {
+            // In a real implementation: feed ref into WebRTC APM reverse stream
+            // Here: just consume (ref is released when handle goes out of scope)
+        }
+    }
+
+    AudioFrameQueue*      micIn_ = nullptr;
+    AudioFrameQueue*      refIn_ = nullptr;
+    AudioFrameQueue*      out_   = nullptr;
+    const TtsStateSignal* ttsState_ = nullptr;
+    uint64_t              seq_   = 0;
     SharedBufferPool<AudioFrame> pool_;
-    int              processMs_;
+    int                   processMs_;
 };
 
 // ---------------------------------------------------------------------------
 // SimulatedSttNode
+//   Accumulates N audio frames then emits a simulated text chunk.
 // ---------------------------------------------------------------------------
 
 class SimulatedSttNode final
@@ -252,7 +288,7 @@ protected:
             ++frames_;
             std::this_thread::sleep_for(std::chrono::milliseconds(processMs_));
 
-            // Ogni 50 frame produce un utterance
+            // Every 50 frames produce an utterance
             if (frames_ % 50 == 0 && out_) {
                 TextChunk c;
                 c.text        = "Utterance " + std::to_string(frames_ / 50);
@@ -272,87 +308,127 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// SimulatedBargeInNode
-//   - Thread A: processing testo STT → forward a LLM, rileva pattern
-//   - Thread B: polling stdin non-bloccante (tasto 'b')
+// SimulatedClassifierBargeInNode
+//   Replaces SimulatedBargeInNode with TTS-state-aware classification.
+//
+//   When TTS inactive (pass-through):
+//     - Forwards all text from sttText to llmText directly.
+//     - No classification, no barge-in.
+//
+//   When TTS active:
+//     - Reads text from sttText queue.
+//     - Classifies: keyword match → barge-in, otherwise → overlapBuffer.
+//     - Does NOT forward to llmText.
+//     - Keyboard 'b' → manual barge-in.
+//
+//   On TTS transition ON→OFF:
+//     - Flushes overlapBuffer content to llmText as a single TextChunk
+//       prefixed with "[utente durante risposta]: ".
 // ---------------------------------------------------------------------------
 
-class SimulatedBargeInNode final
+class SimulatedClassifierBargeInNode final
     : public ActiveNodeBase
-    , public IBargeInContextNode
+    , public IClassifierBargeInNode
 {
 public:
-    SimulatedBargeInNode() {
-        // Parole chiave per barge-in da contesto
-        keywords_ = {"stop", "interrompi", "aspetta",
-                     "fermati", "basta", "silenzio"};
+    SimulatedClassifierBargeInNode() {
+        keywords_ = {"stop", "interrompi", "basta", "fermati"};
     }
 
-    const char* name()   const override { return "SimBargeIn"; }
+    const char* name()   const override { return "SimClassifierBargeIn"; }
     bool initialize()          override { return true; }
 
-    void setTextInputQueue(TextQueue* q)          override { in_   = q; }
-    void setTextOutputQueue(TextQueue* q)         override { out_  = q; }
-    void setBargeInEventQueue(BargeInQueue* q)    override { evq_  = q; }
-    void setTtsInterruptSignal(InterruptSignal* s)override { ttsInt_ = s; }
-    void setLlmInterruptSignal(InterruptSignal* s)override { llmInt_ = s; }
+    void setTextInputQueue(TextQueue* q)            override { textIn_  = q; }
+    void setTextOutputQueue(TextQueue* q)           override { textOut_ = q; }
+    void setBargeInEventQueue(BargeInQueue* q)      override { evq_     = q; }
+    void setTtsInterruptSignal(InterruptSignal* s)  override { ttsInt_  = s; }
+    void setLlmInterruptSignal(InterruptSignal* s)  override { llmInt_  = s; }
+    void setTtsStateSignal(const TtsStateSignal* s) override { ttsState_= s; }
+    void setOverlapBuffer(RollingTextBuffer* buf)   override { overlapBuffer_ = buf; }
 
     void triggerManualBargeIn() override {
-        fireBargeIn(BargeInEvent::Source::Keyboard, "manual");
+        if (ttsState_ && ttsState_->isActive()) {
+            doBargeIn(BargeInEvent::Source::Keyboard, "manual");
+        }
     }
 
     void start() override {
+        kbRunning_.store(true, std::memory_order_release);
         ActiveNodeBase::start();
-        // Thread tastiera separato
-        kbThread_ = std::thread([this] { kbLoop(); });
+        // Separate keyboard polling thread
+        kbThread_ = std::thread([this] { keyboardLoop(); });
     }
 
     void stop() override {
+        kbRunning_.store(false, std::memory_order_release);
         ActiveNodeBase::stop();
-        kbRunning_.store(false);
         if (kbThread_.joinable()) kbThread_.join();
     }
 
 protected:
     void runLoop() override {
+        bool wasTtsActive = false;
+
         while (running()) {
             TextChunk chunk;
-            if (!in_ || !in_->pop(chunk)) break;
+            if (!textIn_ || !textIn_->pop(chunk)) break;
 
-            // Analisi parole chiave
-            if (containsKeyword(chunk.text)) {
-                fireBargeIn(BargeInEvent::Source::ContextDetected, chunk.text);
+            const bool ttsActive = ttsState_ && ttsState_->isActive();
+
+            // Detect TTS OFF transition → flush overlap buffer
+            if (wasTtsActive && !ttsActive) {
+                flushOverlapBuffer();
+            }
+            wasTtsActive = ttsActive;
+
+            if (!ttsActive) {
+                // Pass-through: forward to LLM
+                if (textOut_) textOut_->push(std::move(chunk));
+                continue;
             }
 
-            if (out_) out_->push(chunk);
+            // TTS active: classify
+            if (isBargeInKeyword(chunk.text)) {
+                doBargeIn(BargeInEvent::Source::ContextDetected, chunk.text);
+            } else if (overlapBuffer_) {
+                overlapBuffer_->append(chunk.text + "\n");
+            }
+        }
+
+        // Final flush if TTS was still active when we exit
+        if (wasTtsActive) {
+            flushOverlapBuffer();
         }
     }
 
 private:
-    void kbLoop() {
-        kbRunning_.store(true);
+    void keyboardLoop() {
 #if !defined(_WIN32)
-        // Metti stdin in modalità non-bloccante
+        // Put stdin in non-blocking mode
         const int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
         fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
 #endif
-        while (kbRunning_.load() && running()) {
+        while (kbRunning_.load(std::memory_order_acquire) && running()) {
 #if defined(_WIN32)
             if (_kbhit()) {
                 const int c = _getch();
-                if (c == 'b' || c == 'B') triggerManualBargeIn();
+                if (c == 'b' || c == 'B') {
+                    triggerManualBargeIn();
+                }
             }
 #else
             char c = 0;
             if (read(STDIN_FILENO, &c, 1) == 1) {
-                if (c == 'b' || c == 'B') triggerManualBargeIn();
+                if (c == 'b' || c == 'B') {
+                    triggerManualBargeIn();
+                }
             }
 #endif
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     }
 
-    bool containsKeyword(const std::string& text) const {
+    bool isBargeInKeyword(const std::string& text) const {
         std::string lower = text;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
         for (const auto& kw : keywords_)
@@ -360,7 +436,7 @@ private:
         return false;
     }
 
-    void fireBargeIn(BargeInEvent::Source src, const std::string& reason) {
+    void doBargeIn(BargeInEvent::Source src, const std::string& reason) {
         BargeInEvent ev;
         ev.source      = src;
         ev.timestampNs = nowNs();
@@ -377,19 +453,40 @@ private:
         if (evq_)    evq_->push(ev);
     }
 
-    TextQueue*       in_     = nullptr;
-    TextQueue*       out_    = nullptr;
-    BargeInQueue*    evq_    = nullptr;
-    InterruptSignal* ttsInt_ = nullptr;
-    InterruptSignal* llmInt_ = nullptr;
+    void flushOverlapBuffer() {
+        if (!overlapBuffer_) return;
+        std::string content = overlapBuffer_->snapshot();
+        if (content.empty()) return;
+
+        overlapBuffer_->clear();
+
+        if (textOut_) {
+            TextChunk flush;
+            flush.text        = "[utente durante risposta]: " + content;
+            flush.isFinal     = true;
+            flush.sequence    = ++flushSeq_;
+            flush.timestampNs = nowNs();
+            textOut_->push(std::move(flush));
+        }
+    }
+
+    TextQueue*            textIn_  = nullptr;
+    TextQueue*            textOut_ = nullptr;
+    BargeInQueue*         evq_     = nullptr;
+    InterruptSignal*      ttsInt_  = nullptr;
+    InterruptSignal*      llmInt_  = nullptr;
+    const TtsStateSignal* ttsState_      = nullptr;
+    RollingTextBuffer*    overlapBuffer_ = nullptr;
 
     std::set<std::string> keywords_;
     std::thread           kbThread_;
     std::atomic<bool>     kbRunning_{false};
+    uint64_t              flushSeq_ = 0;
 };
 
 // ---------------------------------------------------------------------------
 // SimulatedLlmNode
+//   Simulates LLM response generation with interrupt support.
 // ---------------------------------------------------------------------------
 
 class SimulatedLlmNode final
@@ -415,7 +512,7 @@ protected:
 
             if (disk_) disk_->append(input.text + "\n");
 
-            // Simula latenza LLM con check interrupt ogni 50ms
+            // Simulate LLM latency with interrupt check every 50ms
             const int steps = processMs_ / 50;
             for (int i = 0; i < steps && running(); ++i) {
                 if (intSig_ && intSig_->check()) {
@@ -450,7 +547,43 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// SimulatedInterpreterNode
+//   Simple pass-through for simulation: forwards all text from input to
+//   output.  In production this would parse JSON, extract spoken text,
+//   and filter commands.
+// ---------------------------------------------------------------------------
+
+class SimulatedInterpreterNode final
+    : public ActiveNodeBase
+    , public IInterpreterNode
+{
+public:
+    const char* name()   const override { return "SimInterpreter"; }
+    bool initialize()          override { return true; }
+
+    void setInputQueue(TextQueue* q)  override { in_  = q; }
+    void setOutputQueue(TextQueue* q) override { out_ = q; }
+
+protected:
+    void runLoop() override {
+        while (running()) {
+            TextChunk chunk;
+            if (!in_ || !in_->pop(chunk)) break;
+            if (out_) out_->push(std::move(chunk));
+        }
+    }
+
+private:
+    TextQueue* in_  = nullptr;
+    TextQueue* out_ = nullptr;
+};
+
+// ---------------------------------------------------------------------------
 // SimulatedTtsNode
+//   - Manages TtsStateSignal: sets active BEFORE pushing any frame for a
+//     text chunk, sets inactive AFTER the last frame (or on interrupt).
+//   - Pushes to both speakerOut and aecRefOut.
+//   - Fix #11: explicit copy for ref, move for speaker.
 // ---------------------------------------------------------------------------
 
 class SimulatedTtsNode final
@@ -468,6 +601,7 @@ public:
     void setSpeakerOutputQueue(AudioFrameQueue* q)         override { spkOut_   = q; }
     void setAecReferenceOutputQueue(AudioFrameQueue* q)    override { refOut_   = q; }
     void setInterruptSignal(InterruptSignal* s)            override { intSig_   = s; }
+    void setTtsStateSignal(TtsStateSignal* signal)         override { ttsState_ = signal; }
 
 protected:
     void wake() override { pool_.stop(); }
@@ -477,17 +611,25 @@ protected:
             TextChunk text;
             if (!in_ || !in_->pop(text)) break;
 
+            // Mark TTS active BEFORE pushing any frame
+            if (ttsState_) ttsState_->setActive(true);
+
+            bool interrupted = false;
             for (int i = 0; i < framesPerText_ && running(); ++i) {
                 // Check interrupt
                 if (intSig_ && intSig_->check()) {
                     intSig_->clear();
                     std::printf("[TTS] Interrupted after %d frames\n", i);
                     std::fflush(stdout);
+                    interrupted = true;
                     break;
                 }
 
                 auto frame = pool_.acquireWithTimeout(std::chrono::milliseconds(50));
-                if (!frame) continue;
+                if (!frame) {
+                    if (!running()) { interrupted = true; break; }
+                    continue;
+                }
 
                 frame->format      = format_;
                 frame->resizeForFormat();
@@ -495,29 +637,40 @@ protected:
                 frame->timestampNs = nowNs();
                 for (auto& s : frame->pcm16) s = 500;
 
-                // Push a entrambe le code — reference prima (AEC timing)
-                if (refOut_) refOut_->push(frame);
+                // Push to both queues — reference first (AEC timing)
+                // Fix #11: explicit copy for ref, move for speaker
+                if (refOut_) {
+                    auto refCopy = std::make_shared<AudioFrame>(*frame);
+                    refOut_->push(std::move(refCopy));
+                }
                 if (spkOut_) spkOut_->push(std::move(frame));
 
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(format_.frameMs));
             }
+
+            // Mark TTS inactive AFTER the last frame (or on interrupt)
+            if (ttsState_) ttsState_->setActive(false);
+
+            (void)interrupted;  // consumed above; explicit for clarity
         }
     }
 
 private:
     AudioFormat      format_;
-    TextQueue*       in_      = nullptr;
-    AudioFrameQueue* spkOut_  = nullptr;
-    AudioFrameQueue* refOut_  = nullptr;
-    InterruptSignal* intSig_  = nullptr;
-    uint64_t         seq_     = 0;
+    TextQueue*       in_       = nullptr;
+    AudioFrameQueue* spkOut_   = nullptr;
+    AudioFrameQueue* refOut_   = nullptr;
+    InterruptSignal* intSig_   = nullptr;
+    TtsStateSignal*  ttsState_ = nullptr;
+    uint64_t         seq_      = 0;
     SharedBufferPool<AudioFrame> pool_;
     int              framesPerText_;
 };
 
 // ---------------------------------------------------------------------------
 // SimulatedAudioOutputNode
+//   Consumes frames from speaker queue, simulates playback delay.
 // ---------------------------------------------------------------------------
 
 class SimulatedAudioOutputNode final

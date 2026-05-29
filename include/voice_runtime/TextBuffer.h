@@ -13,7 +13,8 @@ namespace voice_runtime {
 
 class RollingTextBuffer {
 public:
-    explicit RollingTextBuffer(std::size_t maxBytes) : maxBytes_(maxBytes) {}
+    explicit RollingTextBuffer(std::size_t maxBytes, bool unbounded = false)
+        : maxBytes_(unbounded ? SIZE_MAX : maxBytes) {}
 
     void append(const std::string& text) {
         std::lock_guard<std::mutex> lk(mutex_);
@@ -32,6 +33,11 @@ public:
     std::size_t size() const {
         std::lock_guard<std::mutex> lk(mutex_);
         return data_.size();
+    }
+
+    void clear() {
+        std::lock_guard<std::mutex> lk(mutex_);
+        data_.clear();
     }
 
 private:

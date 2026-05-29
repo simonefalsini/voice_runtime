@@ -119,6 +119,21 @@ struct InterruptSignal {
 };
 
 // ---------------------------------------------------------------------------
+// TTS state signal — shared between TTS, VAD, AEC, Classifier
+// ---------------------------------------------------------------------------
+
+struct TtsStateSignal {
+    std::atomic<bool> active{false};
+
+    void setActive(bool v) noexcept {
+        active.store(v, std::memory_order_release);
+    }
+    bool isActive() const noexcept {
+        return active.load(std::memory_order_acquire);
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Stats
 // ---------------------------------------------------------------------------
 
@@ -126,6 +141,7 @@ struct RuntimeStats {
     uint64_t    produced      = 0;
     uint64_t    consumed      = 0;
     uint64_t    dropped       = 0;
+    uint64_t    timeouts      = 0;  // pool acquire timeouts (not a real drop)
     uint64_t    recycled      = 0;
     std::size_t highWatermark = 0;
 };

@@ -100,6 +100,8 @@ def download_and_extract_onnx(deps_dir, dist_dir):
                     
     # 3. macOS (OSX)
     osx_src = os.path.join(tmp_dir, "runtimes", "osx", "native")
+    if not os.path.exists(osx_src):
+        osx_src = os.path.join(tmp_dir, "runtimes", "osx-arm64", "native")
     if os.path.exists(osx_src):
         for config in ["Release", "Debug"]:
             platform_dir = os.path.join(onnx_root, "osx", config)
@@ -152,6 +154,69 @@ def shutil_rmtree_safe(path):
     import shutil
     shutil.rmtree(path, ignore_errors=True)
 
+def download_and_extract_openssl(deps_dir, dist_dir):
+    print("--- Downloading and Installing OpenSSL 3.0.17 for Windows ---")
+    openssl_root = os.path.join(dist_dir, "lib", "openssl", "windows")
+    
+    # Check if already installed
+    check_file = os.path.join(openssl_root, "Release", "libssl.lib")
+    if os.path.exists(check_file):
+        print("OpenSSL 3.0.17 is already installed.")
+        return
+
+    tmp_dir = os.path.join(deps_dir, "build_openssl_tmp")
+    if os.path.exists(tmp_dir):
+        shutil_rmtree_safe(tmp_dir)
+    os.makedirs(tmp_dir, exist_ok=True)
+    
+    nupkg_url = "https://www.nuget.org/api/v2/package/openssl-native/3.0.17"
+    nupkg_path = os.path.join(tmp_dir, "openssl.zip")
+    
+    print(f"Downloading OpenSSL NuGet from {nupkg_url}...")
+    try:
+        urllib.request.urlretrieve(nupkg_url, nupkg_path)
+    except Exception as e:
+        print(f"Failed to download OpenSSL from NuGet: {e}")
+        return
+        
+    print("Extracting OpenSSL NuGet package...")
+    with zipfile.ZipFile(nupkg_path, 'r') as zip_ref:
+        zip_ref.extractall(tmp_dir)
+        
+    # Copy headers to libraries/include/openssl
+    src_headers = os.path.join(tmp_dir, "include", "openssl")
+    dest_headers = os.path.join(dist_dir, "include", "openssl")
+    if os.path.exists(src_headers):
+        os.makedirs(dest_headers, exist_ok=True)
+        import shutil
+        shutil.copytree(src_headers, dest_headers, dirs_exist_ok=True)
+        
+    # Copy libraries to libraries/lib/openssl/windows/Release and Debug
+    src_lib_dir = os.path.join(tmp_dir, "lib", "win-x64", "native")
+    if os.path.exists(src_lib_dir):
+        import glob
+        for config in ["Release", "Debug"]:
+            platform_dir = os.path.join(dist_dir, "lib", "openssl", "windows", config)
+            os.makedirs(platform_dir, exist_ok=True)
+            # Find and copy static libs robustly
+            ssl_libs = glob.glob(os.path.join(src_lib_dir, "libssl_static_*.lib"))
+            crypto_libs = glob.glob(os.path.join(src_lib_dir, "libcrypto_static_*.lib"))
+            if ssl_libs and crypto_libs:
+                ssl_lib = next((x for x in ssl_libs if "v143" in x), ssl_libs[0])
+                crypto_lib = next((x for x in crypto_libs if "v143" in x), crypto_libs[0])
+                shutil.copy2(ssl_lib, os.path.join(platform_dir, "libssl.lib"))
+                shutil.copy2(crypto_lib, os.path.join(platform_dir, "libcrypto.lib"))
+            
+            # Copy DLLs
+            src_dll_dir = os.path.join(tmp_dir, "runtimes", "win-x64", "native")
+            if os.path.exists(src_dll_dir):
+                shutil.copy2(os.path.join(src_dll_dir, "libssl-3-x64.dll"), os.path.join(platform_dir, "libssl-3-x64.dll"))
+                shutil.copy2(os.path.join(src_dll_dir, "libcrypto-3-x64.dll"), os.path.join(platform_dir, "libcrypto-3-x64.dll"))
+
+    # Clean up
+    shutil_rmtree_safe(tmp_dir)
+    print("OpenSSL 3.0.17 installation complete!")
+
 def main():
     deps_dir = os.path.dirname(os.path.abspath(__file__))
     dist_dir = os.path.join(os.path.dirname(deps_dir), "libraries")
@@ -181,6 +246,14 @@ def main():
         {
             "name": "qwen3-asr.cpp",
             "url": "https://github.com/predict-woo/qwen3-asr.cpp"
+        },
+        {
+            "name": "cpp-httplib",
+            "url": "https://github.com/yhirose/cpp-httplib.git"
+        },
+        {
+            "name": "json",
+            "url": "https://github.com/nlohmann/json.git"
         }
     ]
     
@@ -224,13 +297,13 @@ def main():
         if os.path.exists(patch_file):
             print(f"Checking/Applying patch for {name}...")
             try:
-                res = subprocess.run(["git", "apply", "--check", patch_file], cwd=dep_path, capture_output=True)
+                res = subprocess.run(["git", "apply", "--ignore-whitespace", "--check", patch_file], cwd=dep_path, capture_output=True)
                 if res.returncode == 0:
                     print("Applying patch...")
-                    run_cmd(["git", "apply", patch_file], cwd=dep_path)
+                    run_cmd(["git", "apply", "--ignore-whitespace", patch_file], cwd=dep_path)
                 else:
                     # Check if already applied
-                    res_rev = subprocess.run(["git", "apply", "--reverse", "--check", patch_file], cwd=dep_path, capture_output=True)
+                    res_rev = subprocess.run(["git", "apply", "--ignore-whitespace", "--reverse", "--check", patch_file], cwd=dep_path, capture_output=True)
                     if res_rev.returncode == 0:
                         print("Patch is already applied.")
                     else:
@@ -261,6 +334,10 @@ def main():
 
     # 3. Download ONNX Runtime
     download_and_extract_onnx(deps_dir, dist_dir)
+
+    # 4. Download OpenSSL for Windows
+    if sys.platform.startswith('win'):
+        download_and_extract_openssl(deps_dir, dist_dir)
 
     print("\nAll dependencies downloaded, cloned, and patched successfully!")
 

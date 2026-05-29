@@ -69,6 +69,8 @@ def get_ggml_cmake_args(dist_dir, platform, config, abi=None):
                     args.append(f"-DGGML_METAL_LIB={path}")
                 elif 'ggml-vulkan' in file:
                     args.append(f"-DGGML_VULKAN_LIB={path}")
+                elif 'ggml-blas' in file:
+                    args.append(f"-DGGML_BLAS_LIB={path}")
                 elif file.startswith('ggml.') or file.startswith('libggml.'):
                     args.append(f"-DGGML_LIB={path}")
     return args
@@ -139,6 +141,30 @@ def copy_qwen3_headers(deps_dir, dist_dir):
                 shutil.copy2(os.path.join(src_dir, file), os.path.join(dest_dir, file))
     print(f"qwen3-asr.cpp Headers exported to {dest_dir}")
 
+def copy_cpp_httplib_headers(deps_dir, dist_dir):
+    print("--- Exporting cpp-httplib Headers ---")
+    src_file = os.path.join(deps_dir, "cpp-httplib", "httplib.h")
+    dest_dir = os.path.join(dist_dir, "include")
+    os.makedirs(dest_dir, exist_ok=True)
+    if os.path.exists(src_file):
+        shutil.copy2(src_file, os.path.join(dest_dir, "httplib.h"))
+        print(f"cpp-httplib Headers exported to {dest_dir}")
+    else:
+        print(f"Warning: {src_file} not found.")
+
+def copy_nlohmann_json_headers(deps_dir, dist_dir):
+    print("--- Exporting nlohmann/json Headers ---")
+    src_dir = os.path.join(deps_dir, "json", "single_include", "nlohmann")
+    dest_dir = os.path.join(dist_dir, "include", "nlohmann")
+    if os.path.exists(dest_dir):
+        shutil.rmtree(dest_dir)
+    os.makedirs(dest_dir, exist_ok=True)
+    if os.path.exists(src_dir):
+        shutil.copytree(src_dir, dest_dir, dirs_exist_ok=True)
+        print(f"nlohmann/json Headers exported to {dest_dir}")
+    else:
+        print(f"Warning: {src_dir} not found.")
+
 def build_dependency_espeak(deps_dir, dist_dir, platform, config, cmake_args, generator=None, arch=None, abi=None):
     print(f"--- Building espeak-ng for {platform} ({config}" + (f", {abi}" if abi else "") + ") ---")
     src_dir = os.path.join(deps_dir, "espeak-ng")
@@ -199,6 +225,11 @@ def build_dependency_kokoro(deps_dir, dist_dir, platform, config, cmake_args, ge
         f"-DCMAKE_BUILD_TYPE={config}",
         f"-DONNXRUNTIME_ROOT={onnx_root}"
     ]
+    if platform == "ios":
+        cmd_configure += [
+            f"-DONNXRUNTIME_LIB={onnx_root}/lib/onnxruntime.xcframework",
+            f"-DONNXRUNTIME_INCLUDE_DIR={onnx_root}/include"
+        ]
     if generator:
         cmd_configure += ["-G", generator]
     if arch:
@@ -349,6 +380,9 @@ def build_windows(deps_dir, dist_dir):
         lib_dest_dir = os.path.join(dist_dir, "lib", "webrtc_audio_processing", "windows", config)
         os.makedirs(lib_dest_dir, exist_ok=True)
         shutil.copy(lib_src, os.path.join(lib_dest_dir, "webrtc_audio_processing.lib"))
+        absl_build_dir = os.path.join(build_dir, "abseil-cpp")
+        if os.path.exists(absl_build_dir):
+            copy_static_libs(absl_build_dir, lib_dest_dir)
         
     print("Windows WebRTC build successful for all configurations!")
 
@@ -442,6 +476,9 @@ def build_linux(deps_dir, dist_dir):
         lib_dest_dir = os.path.join(dist_dir, "lib", "webrtc_audio_processing", "linux", config)
         os.makedirs(lib_dest_dir, exist_ok=True)
         shutil.copy(lib_src, os.path.join(lib_dest_dir, "libwebrtc_audio_processing.a"))
+        absl_build_dir = os.path.join(build_dir, "abseil-cpp")
+        if os.path.exists(absl_build_dir):
+            copy_static_libs(absl_build_dir, lib_dest_dir)
         
     print("Linux WebRTC build successful for all configurations!")
 
@@ -528,6 +565,9 @@ def build_osx(deps_dir, dist_dir):
         lib_dest_dir = os.path.join(dist_dir, "lib", "webrtc_audio_processing", "osx", config)
         os.makedirs(lib_dest_dir, exist_ok=True)
         shutil.copy(lib_src, os.path.join(lib_dest_dir, "libwebrtc_audio_processing.a"))
+        absl_build_dir = os.path.join(build_dir, "abseil-cpp")
+        if os.path.exists(absl_build_dir):
+            copy_static_libs(absl_build_dir, lib_dest_dir)
         
     print("OSX WebRTC build successful for all configurations!")
 
@@ -619,6 +659,9 @@ def build_ios(deps_dir, dist_dir):
         lib_dest_dir = os.path.join(dist_dir, "lib", "webrtc_audio_processing", "ios", config)
         os.makedirs(lib_dest_dir, exist_ok=True)
         shutil.copy(lib_src, os.path.join(lib_dest_dir, "libwebrtc_audio_processing.a"))
+        absl_build_dir = os.path.join(build_dir, "abseil-cpp")
+        if os.path.exists(absl_build_dir):
+            copy_static_libs(absl_build_dir, lib_dest_dir)
         
     print("iOS WebRTC build successful for all configurations!")
 
@@ -745,6 +788,9 @@ def build_android(deps_dir, dist_dir, ndk_path=None):
             lib_dest_dir = os.path.join(dist_dir, "lib", "webrtc_audio_processing", "android", abi, config)
             os.makedirs(lib_dest_dir, exist_ok=True)
             shutil.copy(lib_src, os.path.join(lib_dest_dir, "libwebrtc_audio_processing.a"))
+            absl_build_dir = os.path.join(build_dir, "abseil-cpp")
+            if os.path.exists(absl_build_dir):
+                copy_static_libs(absl_build_dir, lib_dest_dir)
             
     print("Android WebRTC build successful for all ABIs and configurations!")
 
@@ -827,10 +873,7 @@ def copy_headers(deps_dir, dist_dir):
     
     # We will copy all .h files from the requested parts of WebRTC
     subdirs_to_copy = [
-        "api/audio",
-        "api/environment",
-        "api/task_queue",
-        "api/units",
+        "api",
         "common_audio",
         "modules/audio_processing",
         "rtc_base",
@@ -910,12 +953,19 @@ else()
 endif()
 
 set(WEBRTC_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include/webrtc_audio_processing")
+set(WEBRTC_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../../deps/WebRTC")
 
 if(NOT TARGET WebRtcAudioProcessing::WebRtcAudioProcessing)
     add_library(WebRtcAudioProcessing::WebRtcAudioProcessing STATIC IMPORTED GLOBAL)
     set_target_properties(WebRtcAudioProcessing::WebRtcAudioProcessing PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES "${WEBRTC_INCLUDE_DIR}"
+        INTERFACE_INCLUDE_DIRECTORIES "${WEBRTC_INCLUDE_DIR};${WEBRTC_SOURCE_DIR}"
     )
+
+    if(APPLE)
+        set_property(TARGET WebRtcAudioProcessing::WebRtcAudioProcessing APPEND PROPERTY
+            INTERFACE_LINK_LIBRARIES "-framework CoreFoundation" "-framework Foundation"
+        )
+    endif()
 
     # Debug config
     set(LIB_DEBUG "${CMAKE_CURRENT_LIST_DIR}/../lib/webrtc_audio_processing/${PLATFORM_DIR}/Debug/${LIB_PREFIX}webrtc_audio_processing${LIB_SUFFIX}")
@@ -924,6 +974,13 @@ if(NOT TARGET WebRtcAudioProcessing::WebRtcAudioProcessing)
         set_target_properties(WebRtcAudioProcessing::WebRtcAudioProcessing PROPERTIES
             IMPORTED_LOCATION_DEBUG "${LIB_DEBUG}"
         )
+        get_filename_component(LIB_DIR_DEBUG "${LIB_DEBUG}" DIRECTORY)
+        file(GLOB ABSL_LIBS_DEBUG "${LIB_DIR_DEBUG}/${LIB_PREFIX}absl_*${LIB_SUFFIX}")
+        foreach(lib ${ABSL_LIBS_DEBUG})
+            set_property(TARGET WebRtcAudioProcessing::WebRtcAudioProcessing APPEND PROPERTY
+                INTERFACE_LINK_LIBRARIES "$<$<CONFIG:Debug>:${lib}>"
+            )
+        endforeach()
     endif()
 
     # Release config
@@ -933,6 +990,13 @@ if(NOT TARGET WebRtcAudioProcessing::WebRtcAudioProcessing)
         set_target_properties(WebRtcAudioProcessing::WebRtcAudioProcessing PROPERTIES
             IMPORTED_LOCATION_RELEASE "${LIB_RELEASE}"
         )
+        get_filename_component(LIB_DIR_RELEASE "${LIB_RELEASE}" DIRECTORY)
+        file(GLOB ABSL_LIBS_RELEASE "${LIB_DIR_RELEASE}/${LIB_PREFIX}absl_*${LIB_SUFFIX}")
+        foreach(lib ${ABSL_LIBS_RELEASE})
+            set_property(TARGET WebRtcAudioProcessing::WebRtcAudioProcessing APPEND PROPERTY
+                INTERFACE_LINK_LIBRARIES "$<$<CONFIG:Release>:${lib}>"
+            )
+        endforeach()
     endif()
 endif()
 """
@@ -966,7 +1030,7 @@ set(GGML_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include/ggml")
 
 if(NOT TARGET Ggml::Ggml)
     # Main target
-    add_library(Ggml::Ggml STATIC IMPORTED GLOBAL)
+    add_library(Ggml::Ggml INTERFACE IMPORTED GLOBAL)
     set_target_properties(Ggml::Ggml PROPERTIES
         INTERFACE_INCLUDE_DIRECTORIES "${GGML_INCLUDE_DIR}"
     )
@@ -984,8 +1048,8 @@ if(NOT TARGET Ggml::Ggml)
         if(EXISTS "${base_dir}")
             set_property(TARGET Ggml::Ggml APPEND PROPERTY IMPORTED_CONFIGURATIONS ${config})
             
-            # List of candidate libraries: ggml, ggml-base, ggml-cpu, ggml-cuda, ggml-metal, ggml-vulkan
-            set(cand_libs "ggml" "ggml-base" "ggml-cpu" "ggml-cuda" "ggml-metal" "ggml-vulkan")
+            # List of candidate libraries: ggml, ggml-base, ggml-cpu, ggml-cuda, ggml-metal, ggml-vulkan, ggml-blas
+            set(cand_libs "ggml" "ggml-base" "ggml-cpu" "ggml-cuda" "ggml-metal" "ggml-vulkan" "ggml-blas")
             set(GGML_LIBS "")
             foreach(lib IN LISTS cand_libs)
                 set(lib_path "${base_dir}/${LIB_PREFIX}${lib}${LIB_SUFFIX}")
@@ -1002,8 +1066,8 @@ if(NOT TARGET Ggml::Ggml)
             endforeach()
             
             # Link main target to all sub-libraries
-            set_target_properties(Ggml::Ggml PROPERTIES
-                INTERFACE_LINK_LIBRARIES_${config} "${GGML_LIBS}"
+            set_property(TARGET Ggml::Ggml APPEND PROPERTY
+                INTERFACE_LINK_LIBRARIES "$<$<CONFIG:${config}>:${GGML_LIBS}>"
             )
         endif()
     endforeach()
@@ -1038,7 +1102,7 @@ endif()
 set(ESPEAK_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include/espeak-ng")
 
 if(NOT TARGET EspeakNg::EspeakNg)
-    add_library(EspeakNg::EspeakNg STATIC IMPORTED GLOBAL)
+    add_library(EspeakNg::EspeakNg INTERFACE IMPORTED GLOBAL)
     set_target_properties(EspeakNg::EspeakNg PROPERTIES
         INTERFACE_INCLUDE_DIRECTORIES "${ESPEAK_INCLUDE_DIR}"
     )
@@ -1070,8 +1134,8 @@ if(NOT TARGET EspeakNg::EspeakNg)
                 endif()
             endforeach()
             
-            set_target_properties(EspeakNg::EspeakNg PROPERTIES
-                INTERFACE_LINK_LIBRARIES_${config} "${ESPEAK_LIBS}"
+            set_property(TARGET EspeakNg::EspeakNg APPEND PROPERTY
+                INTERFACE_LINK_LIBRARIES "$<$<CONFIG:${config}>:${ESPEAK_LIBS}>"
             )
         endif()
     endforeach()
@@ -1111,7 +1175,7 @@ endif()
 set(KOKORO_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include/kokoro")
 
 if(NOT TARGET Kokoro::Kokoro)
-    add_library(Kokoro::Kokoro STATIC IMPORTED GLOBAL)
+    add_library(Kokoro::Kokoro INTERFACE IMPORTED GLOBAL)
     set_target_properties(Kokoro::Kokoro PROPERTIES
         INTERFACE_INCLUDE_DIRECTORIES "${KOKORO_INCLUDE_DIR}"
     )
@@ -1170,8 +1234,8 @@ if(NOT TARGET Kokoro::Kokoro)
                 endif()
             endif()
             
-            set_target_properties(Kokoro::Kokoro PROPERTIES
-                INTERFACE_LINK_LIBRARIES_${config} "Kokoro::kokoro_core;Kokoro::onnxruntime"
+            set_property(TARGET Kokoro::Kokoro APPEND PROPERTY
+                INTERFACE_LINK_LIBRARIES "$<$<CONFIG:${config}>:Kokoro::kokoro_core;Kokoro::onnxruntime>"
             )
         endif()
     endforeach()
@@ -1206,7 +1270,7 @@ endif()
 set(QWEN3_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include/qwen3-asr")
 
 if(NOT TARGET Qwen3Asr::Qwen3Asr)
-    add_library(Qwen3Asr::Qwen3Asr STATIC IMPORTED GLOBAL)
+    add_library(Qwen3Asr::Qwen3Asr INTERFACE IMPORTED GLOBAL)
     set_target_properties(Qwen3Asr::Qwen3Asr PROPERTIES
         INTERFACE_INCLUDE_DIRECTORIES "${QWEN3_INCLUDE_DIR}"
     )
@@ -1244,11 +1308,124 @@ if(NOT TARGET Qwen3Asr::Qwen3Asr)
             endforeach()
             
             # Link main target to all components and also GGML
-            set_target_properties(Qwen3Asr::Qwen3Asr PROPERTIES
-                INTERFACE_LINK_LIBRARIES_${config} "${QWEN3_LIBS};Ggml::Ggml"
+            set_property(TARGET Qwen3Asr::Qwen3Asr APPEND PROPERTY
+                INTERFACE_LINK_LIBRARIES "$<$<CONFIG:${config}>:${QWEN3_LIBS};Ggml::Ggml>"
             )
         endif()
     endforeach()
+endif()
+"""
+
+    find_openssl = """# FindOpenSSL.cmake
+# Custom FindOpenSSL module to handle local precompiled OpenSSL on Windows NuGet, and system OpenSSL on other platforms.
+
+if(WIN32)
+    # Local precompiled OpenSSL for Windows
+    set(OPENSSL_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include")
+    set(OPENSSL_FOUND TRUE)
+    
+    if(NOT TARGET OpenSSL::SSL)
+        add_library(OpenSSL::SSL STATIC IMPORTED GLOBAL)
+        set_target_properties(OpenSSL::SSL PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${OPENSSL_INCLUDE_DIR}"
+        )
+        
+        # Debug config
+        set(SSL_LIB_DEBUG "${CMAKE_CURRENT_LIST_DIR}/../lib/openssl/windows/Debug/libssl.lib")
+        if(EXISTS "${SSL_LIB_DEBUG}")
+            set_property(TARGET OpenSSL::SSL APPEND PROPERTY IMPORTED_CONFIGURATIONS DEBUG)
+            set_target_properties(OpenSSL::SSL PROPERTIES
+                IMPORTED_LOCATION_DEBUG "${SSL_LIB_DEBUG}"
+            )
+        endif()
+        
+        # Release config
+        set(SSL_LIB_RELEASE "${CMAKE_CURRENT_LIST_DIR}/../lib/openssl/windows/Release/libssl.lib")
+        if(EXISTS "${SSL_LIB_RELEASE}")
+            set_property(TARGET OpenSSL::SSL APPEND PROPERTY IMPORTED_CONFIGURATIONS RELEASE)
+            set_target_properties(OpenSSL::SSL PROPERTIES
+                IMPORTED_LOCATION_RELEASE "${SSL_LIB_RELEASE}"
+            )
+        endif()
+    endif()
+
+    if(NOT TARGET OpenSSL::Crypto)
+        add_library(OpenSSL::Crypto STATIC IMPORTED GLOBAL)
+        set_target_properties(OpenSSL::Crypto PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${OPENSSL_INCLUDE_DIR}"
+        )
+        
+        # Debug config
+        set(CRYPTO_LIB_DEBUG "${CMAKE_CURRENT_LIST_DIR}/../lib/openssl/windows/Debug/libcrypto.lib")
+        if(EXISTS "${CRYPTO_LIB_DEBUG}")
+            set_property(TARGET OpenSSL::Crypto APPEND PROPERTY IMPORTED_CONFIGURATIONS DEBUG)
+            set_target_properties(OpenSSL::Crypto PROPERTIES
+                IMPORTED_LOCATION_DEBUG "${CRYPTO_LIB_DEBUG}"
+            )
+        endif()
+        
+        # Release config
+        set(CRYPTO_LIB_RELEASE "${CMAKE_CURRENT_LIST_DIR}/../lib/openssl/windows/Release/libcrypto.lib")
+        if(EXISTS "${CRYPTO_LIB_RELEASE}")
+            set_property(TARGET OpenSSL::Crypto APPEND PROPERTY IMPORTED_CONFIGURATIONS RELEASE)
+            set_target_properties(OpenSSL::Crypto PROPERTIES
+                IMPORTED_LOCATION_RELEASE "${CRYPTO_LIB_RELEASE}"
+            )
+        endif()
+    endif()
+
+    # Link to socket library for Windows
+    set_property(TARGET OpenSSL::SSL APPEND PROPERTY INTERFACE_LINK_LIBRARIES ws2_32 crypt32)
+    set_property(TARGET OpenSSL::Crypto APPEND PROPERTY INTERFACE_LINK_LIBRARIES ws2_32 crypt32)
+    
+else()
+    # For non-Windows platforms, bypass this custom module path and use the built-in system FindOpenSSL.cmake
+    # Save current module path
+    set(_OLD_CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH})
+    # Clear module path so find_package searches system path
+    set(CMAKE_MODULE_PATH "")
+    
+    # Delegate to standard FindOpenSSL
+    find_package(OpenSSL ${OpenSSL_FIND_VERSION} REQUIRED)
+    
+    # Restore module path
+    set(CMAKE_MODULE_PATH ${_OLD_CMAKE_MODULE_PATH})
+endif()
+"""
+
+    find_cpphttplib = """# FindCppHttplib.cmake
+# Defines target: CppHttplib::CppHttplib
+
+set(CPPM_HTTPLIB_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include")
+
+if(NOT TARGET CppHttplib::CppHttplib)
+    add_library(CppHttplib::CppHttplib INTERFACE IMPORTED GLOBAL)
+    set_target_properties(CppHttplib::CppHttplib PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${CPPM_HTTPLIB_INCLUDE_DIR}"
+        INTERFACE_COMPILE_DEFINITIONS "CPPHTTPLIB_OPENSSL_SUPPORT"
+    )
+    
+    # Depend on OpenSSL
+    if(NOT TARGET OpenSSL::SSL OR NOT TARGET OpenSSL::Crypto)
+        find_package(OpenSSL REQUIRED)
+    endif()
+    
+    set_target_properties(CppHttplib::CppHttplib PROPERTIES
+        INTERFACE_LINK_LIBRARIES "OpenSSL::SSL;OpenSSL::Crypto"
+    )
+endif()
+"""
+
+    find_json = """# FindNlohmannJson.cmake
+# Defines target: nlohmann_json::nlohmann_json
+
+set(NLOHMANN_JSON_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include")
+
+if(NOT TARGET nlohmann_json::nlohmann_json)
+    add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED GLOBAL)
+    set_target_properties(nlohmann_json::nlohmann_json PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${NLOHMANN_JSON_INCLUDE_DIR}"
+    )
 endif()
 """
 
@@ -1262,6 +1439,12 @@ endif()
         f.write(find_kokoro)
     with open(os.path.join(cmake_dir, "FindQwen3Asr.cmake"), "w", encoding="utf-8") as f:
         f.write(find_qwen3)
+    with open(os.path.join(cmake_dir, "FindOpenSSL.cmake"), "w", encoding="utf-8") as f:
+        f.write(find_openssl)
+    with open(os.path.join(cmake_dir, "FindCppHttplib.cmake"), "w", encoding="utf-8") as f:
+        f.write(find_cpphttplib)
+    with open(os.path.join(cmake_dir, "FindNlohmannJson.cmake"), "w", encoding="utf-8") as f:
+        f.write(find_json)
     print(f"CMake Find modules generated in {cmake_dir}")
 
 def main():
@@ -1335,6 +1518,8 @@ def main():
     copy_espeak_headers(deps_dir, dist_dir)
     copy_kokoro_headers(deps_dir, dist_dir)
     copy_qwen3_headers(deps_dir, dist_dir)
+    copy_cpp_httplib_headers(deps_dir, dist_dir)
+    copy_nlohmann_json_headers(deps_dir, dist_dir)
     
     # Generate CMake import configurations
     generate_cmake_imports(dist_dir)

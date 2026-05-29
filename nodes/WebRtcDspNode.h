@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <iostream>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -26,6 +27,8 @@
 #include "api/audio/audio_frame.h"
 #include "api/scoped_refptr.h"
 #include "modules/audio_processing/include/audio_processing.h"
+#include "api/environment/environment_factory.h"
+#include "api/audio/builtin_audio_processing_builder.h"
 #endif
 
 #if VOICE_RUNTIME_ENABLE_WEBRTC_VAD
@@ -64,6 +67,10 @@ struct WebRtcDspConfig {
     // Pool locale per i frame clean prodotti dal nodo.
     std::size_t outputPoolSize       = 256;
 
+    // Grace period (ms) after TTS activation during which processed frames are
+    // discarded to let the AEC model stabilize on the new echo reference.
+    int aecWarmupGracePeriodMs       = 200;
+
     // Solo per build senza WebRTC: permette test di wiring come pass-through.
     // In produzione deve restare false.
     bool allowPassthroughWithoutWebRtc = false;
@@ -72,13 +79,14 @@ struct WebRtcDspConfig {
 // ---------------------------------------------------------------------------
 // WebRtcDspNode
 //   - IAecDspNode: capture mic + render reference -> clean audio
-//   - IVadNode: eventi SpeechStart/SpeechEnd e, opzionalmente, gating audio
+//   - Internal VAD: emits SpeechStart/SpeechEnd events, optional gating
+//   - TtsStateSignal-driven: pass-through when TTS inactive, AEC when active
 // ---------------------------------------------------------------------------
 
 class WebRtcDspNode final
-    : public ActiveNodeBase
-    , public IAecDspNode
-    , public IVadNode
+    : public virtual ActiveNodeBase
+    , public virtual IAecDspNode
+    , public virtual IVadNode
 {
 public:
     explicit WebRtcDspNode(WebRtcDspConfig config)
@@ -91,29 +99,25 @@ public:
     bool initialize() override {
         if (!validateFormat(cfg_.format)) return false;
 
-#if VOICE_RUNTIME_ENABLE_WEBRTC_APM
-        apm_ = webrtc::AudioProcessingBuilder().Create();
-        if (!apm_) return false;
+        // Compute warm-up frame count from config
+        warmupFramesRequired_ = cfg_.format.frameMs > 0
+            ? (cfg_.aecWarmupGracePeriodMs / cfg_.format.frameMs) : 20;
 
+#if VOICE_RUNTIME_ENABLE_WEBRTC_APM
         webrtc::AudioProcessing::Config apmCfg;
         apmCfg.echo_canceller.enabled = cfg_.enableEchoCancellation;
-        apmCfg.echo_canceller.mobile_mode = false;
         apmCfg.high_pass_filter.enabled = cfg_.enableHighPassFilter;
         apmCfg.noise_suppression.enabled = cfg_.enableNoiseSuppression;
 
         apmCfg.gain_controller1.enabled = cfg_.enableAgc1;
         apmCfg.gain_controller2.enabled = cfg_.enableAgc2;
 
-        // Alcune versioni di libwebrtc espongono anche voice_detection nella Config.
-        // Per evitare dipendenze fragili, il VAD del nodo usa WebRtcVad_Process.
-        apm_->ApplyConfig(apmCfg);
+        apm_ = webrtc::BuiltinAudioProcessingBuilder(apmCfg).Build(webrtc::CreateEnvironment());
+        if (!apm_) return false;
 
-#if defined(VOICE_RUNTIME_WEBRTC_HAS_SET_STREAM_DELAY_MS)
         apm_->set_stream_delay_ms(cfg_.estimatedRenderDelayMs);
-#endif
 
-        renderFrame_ = std::make_unique<webrtc::AudioFrame>();
-        captureFrame_ = std::make_unique<webrtc::AudioFrame>();
+
 
         const int samples = cfg_.format.totalSamplesPerFrame();
         renderScratchI16_.resize(static_cast<std::size_t>(samples));
@@ -136,7 +140,7 @@ public:
 #endif
     }
 
-    // IAecDspNode ------------------------------------------------------------
+    // IAecDspNode & IVadNode --------------------------------------------------
 
     void setCaptureInputQueue(AudioFrameQueue* q) override { micIn_ = q; }
     void setRenderInputQueue(AudioFrameQueue* q)  override { refIn_ = q; }
@@ -149,12 +153,13 @@ public:
     bool isSpeaking() const override {
         return speaking_.load(std::memory_order_acquire);
     }
+    void setTtsStateSignal(const TtsStateSignal* signal) override {
+        ttsState_ = signal;
+    }
 
-    // IVadNode ---------------------------------------------------------------
-    // Usabile anche come VAD standalone: input=capture, output=clean/gated.
-
-    void setInputQueue(AudioFrameQueue* in) override { micIn_ = in; }
-    void setEventQueue(VadEventQueue* ev) override { evq_ = ev; }
+    // IVadNode specific
+    void setInputQueue(AudioFrameQueue* in) override { setCaptureInputQueue(in); }
+    void setEventQueue(VadEventQueue* q) override { setVadEventQueue(q); }
 
 protected:
     void wake() override { pool_.stop(); }
@@ -163,14 +168,34 @@ protected:
         if (!initialized_) return;
 
         while (running()) {
-            drainRenderQueue();
-
             AudioFrameHandle mic;
             if (!micIn_ || !micIn_->pop(mic)) break;
 
-            // Render arrivato tra pop capture e processing: lo consumiamo prima
-            // del frame capture corrente per ridurre il delay percepito dall'AEC.
+            const bool ttsActive = ttsState_ && ttsState_->isActive();
+
+            // Detect transition: TTS starts playing
+            if (ttsActive && !wasTtsActive_) {
+                warmupFrameCount_ = 0;
+                warmupComplete_ = false;
+            }
+            wasTtsActive_ = ttsActive;
+
+            // Always call drainRenderQueue() to keep render and capture in sync
             drainRenderQueue();
+
+            if (ttsActive) {
+                // Active mode: update warm-up counter
+                if (!warmupComplete_) {
+                    ++warmupFrameCount_;
+                    if (warmupFrameCount_ >= warmupFramesRequired_) {
+                        warmupComplete_ = true;
+                    }
+                }
+            } else {
+                // Reset warm-up state for next TTS activation
+                warmupFrameCount_ = 0;
+                warmupComplete_ = false;
+            }
 
             auto clean = pool_.acquireWithTimeout(std::chrono::milliseconds(50));
             if (!clean) {
@@ -178,20 +203,48 @@ protected:
                 continue;
             }
 
+            // Always process capture frame so WebRTC APM runs continuously and converges
             const bool processed = processCaptureFrame(*mic, *clean);
             if (!processed) continue;
 
-            clean->sequence = seq_++;
+            clean->format = mic->format;
             clean->timestampNs = mic->timestampNs;
+            clean->sequence = outputSeq_++;
 
             const bool speech = evaluateVad(*clean);
             updateVadState(speech, clean->timestampNs);
 
             if (out_) {
-                if (!cfg_.gateOutputWithVad || isSpeaking()) {
-                    out_->push(std::move(clean));
+                // Discard frames during warm-up period to avoid sending echo spikes to STT
+                const bool inWarmup = ttsActive && !warmupComplete_;
+                if (!inWarmup) {
+                    if (!cfg_.gateOutputWithVad || isSpeaking()) {
+                        out_->push(std::move(clean));
+                    }
                 }
             }
+
+#if VOICE_RUNTIME_ENABLE_WEBRTC_APM
+            static int statsCounter = 0;
+            if (++statsCounter >= 100) {
+                statsCounter = 0;
+                if (apm_) {
+                    auto stats = apm_->GetStatistics();
+                    std::cout << "[WebRtcDSP Stats] ttsActive=" << (ttsActive ? "1" : "0")
+                              << " delay_ms=" 
+                              << (stats.delay_ms ? std::to_string(*stats.delay_ms) : "N/A")
+                              << " delay_median_ms="
+                              << (stats.delay_median_ms ? std::to_string(*stats.delay_median_ms) : "N/A")
+                              << " erle="
+                              << (stats.echo_return_loss_enhancement ? std::to_string(*stats.echo_return_loss_enhancement) : "N/A")
+                              << " erl="
+                              << (stats.echo_return_loss ? std::to_string(*stats.echo_return_loss) : "N/A")
+                              << " div_filter="
+                              << (stats.divergent_filter_fraction ? std::to_string(*stats.divergent_filter_fraction) : "N/A")
+                              << std::endl;
+                }
+            }
+#endif
         }
     }
 
@@ -213,7 +266,7 @@ private:
     void drainRenderQueue() {
         if (!refIn_) return;
         AudioFrameHandle ref;
-        while (refIn_->tryPop(ref)) {
+        if (refIn_->tryPop(ref)) {
             processRenderFrame(*ref);
             ref.reset();
         }
@@ -222,8 +275,24 @@ private:
     bool processRenderFrame(const AudioFrame& frame) {
 #if VOICE_RUNTIME_ENABLE_WEBRTC_APM
         if (!apm_) return false;
-        if (!copyToWebRtcFrame(frame, *renderFrame_, renderScratchI16_)) return false;
-        return apm_->ProcessReverseStream(renderFrame_.get()) ==
+
+        const int samples = frame.format.totalSamplesPerFrame();
+        const int16_t* srcI16 = nullptr;
+        if (frame.format.sampleFormat == SampleFormat::Int16) {
+            srcI16 = frame.pcm16.data();
+        } else {
+            if (renderScratchI16_.size() < static_cast<std::size_t>(samples))
+                renderScratchI16_.resize(static_cast<std::size_t>(samples));
+            for (int i = 0; i < samples; ++i) {
+                const float clamped = std::max(-1.0f, std::min(1.0f, frame.pcmF32[static_cast<std::size_t>(i)]));
+                renderScratchI16_[static_cast<std::size_t>(i)] = static_cast<int16_t>(clamped * 32767.0f);
+            }
+            srcI16 = renderScratchI16_.data();
+        }
+
+        std::vector<int16_t> destI16(samples);
+        webrtc::StreamConfig streamCfg(frame.format.sampleRate, frame.format.channels);
+        return apm_->ProcessReverseStream(srcI16, streamCfg, streamCfg, destI16.data()) ==
                webrtc::AudioProcessing::kNoError;
 #else
         (void)frame;
@@ -237,16 +306,37 @@ private:
 
 #if VOICE_RUNTIME_ENABLE_WEBRTC_APM
         if (!apm_) return false;
-        if (!copyToWebRtcFrame(input, *captureFrame_, captureScratchI16_)) return false;
 
-#if defined(VOICE_RUNTIME_WEBRTC_HAS_SET_STREAM_DELAY_MS)
+        const int samples = input.format.totalSamplesPerFrame();
+        const int16_t* srcI16 = nullptr;
+        if (input.format.sampleFormat == SampleFormat::Int16) {
+            srcI16 = input.pcm16.data();
+        } else {
+            if (captureScratchI16_.size() < static_cast<std::size_t>(samples))
+                captureScratchI16_.resize(static_cast<std::size_t>(samples));
+            for (int i = 0; i < samples; ++i) {
+                const float clamped = std::max(-1.0f, std::min(1.0f, input.pcmF32[static_cast<std::size_t>(i)]));
+                captureScratchI16_[static_cast<std::size_t>(i)] = static_cast<int16_t>(clamped * 32767.0f);
+            }
+            srcI16 = captureScratchI16_.data();
+        }
+
+        std::vector<int16_t> destI16(samples);
+        webrtc::StreamConfig streamCfg(input.format.sampleRate, input.format.channels);
+
         apm_->set_stream_delay_ms(cfg_.estimatedRenderDelayMs);
-#endif
 
-        const int rc = apm_->ProcessStream(captureFrame_.get());
+        const int rc = apm_->ProcessStream(srcI16, streamCfg, streamCfg, destI16.data());
         if (rc != webrtc::AudioProcessing::kNoError) return false;
 
-        copyFromWebRtcFrame(*captureFrame_, output);
+        if (output.format.sampleFormat == SampleFormat::Int16) {
+            output.pcm16 = std::move(destI16);
+        } else {
+            if (output.pcmF32.size() < static_cast<std::size_t>(samples))
+                output.pcmF32.resize(static_cast<std::size_t>(samples));
+            for (int i = 0; i < samples; ++i)
+                output.pcmF32[static_cast<std::size_t>(i)] = destI16[i] / 32768.0f;
+        }
         return true;
 #else
         if (!cfg_.allowPassthroughWithoutWebRtc) return false;
@@ -256,64 +346,11 @@ private:
 #endif
     }
 
-#if VOICE_RUNTIME_ENABLE_WEBRTC_APM
-    bool copyToWebRtcFrame(const AudioFrame& src,
-                           webrtc::AudioFrame& dst,
-                           std::vector<int16_t>& scratch) {
-        if (src.format.sampleRate != cfg_.format.sampleRate ||
-            src.format.channels != cfg_.format.channels ||
-            src.format.frameMs != cfg_.format.frameMs) {
-            return false;
-        }
-
-        const int samples = src.format.totalSamplesPerFrame();
-        const int samplesPerChannel = src.format.samplesPerChannelPerFrame();
-
-        const int16_t* srcI16 = nullptr;
-        if (src.format.sampleFormat == SampleFormat::Int16) {
-            if (static_cast<int>(src.pcm16.size()) < samples) return false;
-            srcI16 = src.pcm16.data();
-        } else {
-            if (static_cast<int>(src.pcmF32.size()) < samples) return false;
-            if (static_cast<int>(scratch.size()) < samples)
-                scratch.resize(static_cast<std::size_t>(samples));
-            for (int i = 0; i < samples; ++i) {
-                const float clamped = std::max(-1.0f, std::min(1.0f, src.pcmF32[static_cast<std::size_t>(i)]));
-                scratch[static_cast<std::size_t>(i)] = static_cast<int16_t>(clamped * 32767.0f);
-            }
-            srcI16 = scratch.data();
-        }
-
-        dst.sample_rate_hz_ = src.format.sampleRate;
-        dst.num_channels_ = static_cast<size_t>(src.format.channels);
-        dst.samples_per_channel_ = static_cast<size_t>(samplesPerChannel);
-        dst.timestamp_ = static_cast<uint32_t>(src.sequence & 0xFFFFFFFFu);
-        std::memcpy(dst.mutable_data(), srcI16,
-                    static_cast<std::size_t>(samples) * sizeof(int16_t));
-        return true;
-    }
-
-    void copyFromWebRtcFrame(const webrtc::AudioFrame& src, AudioFrame& dst) {
-        const int samples = dst.format.totalSamplesPerFrame();
-        const int16_t* data = src.data();
-        if (dst.format.sampleFormat == SampleFormat::Int16) {
-            if (static_cast<int>(dst.pcm16.size()) < samples)
-                dst.pcm16.resize(static_cast<std::size_t>(samples));
-            std::memcpy(dst.pcm16.data(), data,
-                        static_cast<std::size_t>(samples) * sizeof(int16_t));
-        } else {
-            if (static_cast<int>(dst.pcmF32.size()) < samples)
-                dst.pcmF32.resize(static_cast<std::size_t>(samples));
-            for (int i = 0; i < samples; ++i)
-                dst.pcmF32[static_cast<std::size_t>(i)] = data[i] / 32768.0f;
-        }
-    }
-#endif
-
     bool evaluateVad(const AudioFrame& frame) {
         if (!cfg_.enableVad) return true;
 
         const int samplesPerChannel = frame.format.samplesPerChannelPerFrame();
+        (void)samplesPerChannel; // used only with VOICE_RUNTIME_ENABLE_WEBRTC_VAD
         const int totalSamples = frame.format.totalSamplesPerFrame();
 
         const int16_t* data = nullptr;
@@ -386,25 +423,32 @@ private:
 private:
     WebRtcDspConfig cfg_;
 
+    bool wasTtsActive_ = false;
+
     AudioFrameQueue* micIn_ = nullptr;
     AudioFrameQueue* refIn_ = nullptr;
     AudioFrameQueue* out_ = nullptr;
     VadEventQueue* evq_ = nullptr;
 
     SharedBufferPool<AudioFrame> pool_;
-    uint64_t seq_ = 0;
+    uint64_t outputSeq_ = 0;
     std::atomic<bool> initialized_{false};
     std::atomic<bool> speaking_{false};
     uint64_t lastSpeechNs_ = 0;
+
+    const TtsStateSignal* ttsState_ = nullptr;
+
+    // AEC warm-up gate
+    int warmupFramesRequired_ = 0;
+    int warmupFrameCount_ = 0;
+    bool warmupComplete_ = false;
 
     std::vector<int16_t> renderScratchI16_;
     std::vector<int16_t> captureScratchI16_;
     std::vector<int16_t> vadScratchI16_;
 
 #if VOICE_RUNTIME_ENABLE_WEBRTC_APM
-    rtc::scoped_refptr<webrtc::AudioProcessing> apm_;
-    std::unique_ptr<webrtc::AudioFrame> renderFrame_;
-    std::unique_ptr<webrtc::AudioFrame> captureFrame_;
+    webrtc::scoped_refptr<webrtc::AudioProcessing> apm_;
 #endif
 
 #if VOICE_RUNTIME_ENABLE_WEBRTC_VAD

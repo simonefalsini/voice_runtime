@@ -22,8 +22,6 @@ struct RuntimeConfig {
     // Formato richiesto dall'STT (se diverso da pipelineFormat viene inserito un adapter)
     AudioFormat sttInputFormat;
 
-    // Formato richiesto dal DSP/AEC (se diverso da pipelineFormat viene inserito un adapter)
-    AudioFormat dspInputFormat;
 
     // -----------------------------------------------------------------------
     // Pool e code — audio
@@ -46,6 +44,9 @@ struct RuntimeConfig {
     std::size_t llmTextQueueCapacity         = 256;
     std::size_t vadEventQueueCapacity        = 64;
     std::size_t bargeInEventQueueCapacity    = 16;
+    std::size_t classifierOutQueueCapacity   = 256;
+    std::size_t llmOutputQueueCapacity       = 256;   // LLM → Interpreter
+    std::size_t ttsInputQueueCapacity        = 256;   // Interpreter → TTS
 
     // -----------------------------------------------------------------------
     // Politiche di overflow
@@ -66,6 +67,7 @@ struct RuntimeConfig {
     // -----------------------------------------------------------------------
 
     bool  enableVad                          = true;
+    bool  enableIntegratedDspVad             = false;
     float vadSpeechThreshold                 = 0.5f;
 
     // -----------------------------------------------------------------------
@@ -73,6 +75,19 @@ struct RuntimeConfig {
     // -----------------------------------------------------------------------
 
     bool  enableBargeIn                      = true;
+
+    // -----------------------------------------------------------------------
+    // Overlap buffer — commenti utente durante TTS
+    // -----------------------------------------------------------------------
+
+    std::size_t overlapCommentBufferBytes    = 32 * 1024;
+    bool overlapBufferUnbounded              = false;  // true = mantieni tutto
+
+    // -----------------------------------------------------------------------
+    // AEC warm-up grace period
+    // -----------------------------------------------------------------------
+
+    int aecWarmupGracePeriodMs               = 200;
 
     // -----------------------------------------------------------------------
     // Adapter — inseriti automaticamente se i formati differiscono
@@ -102,7 +117,7 @@ struct RuntimeConfig {
         // Per default il mic ha lo stesso formato della pipeline
         micRawFormat  = pipelineFormat;
         sttInputFormat = pipelineFormat;
-        dspInputFormat = pipelineFormat;
+
     }
 };
 

@@ -4,7 +4,7 @@
 #include <thread>
 
 #include "voice_runtime/VoiceRuntime.h"
-#include "voice_runtime/WebRtcDspNode.h"
+#include "WebRtcDspNode.h"
 #include "SimulatedNodes.h"
 
 using namespace voice_runtime;
@@ -20,11 +20,10 @@ int main() {
 
     cfg.micRawFormat = cfg.pipelineFormat;
     cfg.sttInputFormat = cfg.pipelineFormat;
-    cfg.dspInputFormat = cfg.pipelineFormat;
 
     cfg.enableMicAdapter = false;
     cfg.enableSttAdapter = false;
-    cfg.enableVad = true;       // VAD integrato nel WebRtcDspNode
+    cfg.enableVad = true;       // VAD esterno, pass-through durante TTS
     cfg.enableBargeIn = true;
     cfg.vadSpeechThreshold = 0.001f;
     cfg.printMetrics = true;
@@ -43,6 +42,7 @@ int main() {
     dspCfg.vadSpeechThreshold = cfg.vadSpeechThreshold;
     dspCfg.vadHangoverMs = 300;
     dspCfg.gateOutputWithVad = false;
+    dspCfg.aecWarmupGracePeriodMs = cfg.aecWarmupGracePeriodMs;
 
 #if !VOICE_RUNTIME_ENABLE_WEBRTC_APM
     // Solo per poter eseguire questa simulazione senza libwebrtc installata.
@@ -53,13 +53,18 @@ int main() {
     auto mic    = std::make_unique<SimulatedMicrophoneNode>(cfg.micRawFormat, 100, 256);
     auto dsp    = std::make_unique<WebRtcDspNode>(dspCfg);
     auto stt    = std::make_unique<SimulatedSttNode>(1);
-    auto barge  = std::make_unique<SimulatedBargeInNode>();
+    auto classf = std::make_unique<SimulatedClassifierBargeInNode>();
     auto llm    = std::make_unique<SimulatedLlmNode>(350);
+    auto interp = std::make_unique<SimulatedInterpreterNode>();
     auto tts    = std::make_unique<SimulatedTtsNode>(cfg.pipelineFormat, 256, 25);
     auto out    = std::make_unique<SimulatedAudioOutputNode>(1);
 
     VoiceRuntime rt(cfg, std::move(mic), std::move(dsp), std::move(stt),
-                    std::move(barge), std::move(llm), std::move(tts), std::move(out));
+                    std::move(classf), std::move(llm), std::move(interp),
+                    std::move(tts), std::move(out));
+
+    // VAD simulato
+    rt.setVadNode(std::make_unique<SimulatedVadNode>(/*seed=*/42));
 
     if (!rt.initialize()) {
         std::fprintf(stderr, "Runtime initialization failed\n");
@@ -77,8 +82,9 @@ int main() {
     std::this_thread::sleep_for(std::chrono::seconds(10));
     rt.stop();
 
-    std::printf("Done. clean=%llu vadEvents=%llu\n",
+    std::printf("Done. clean=%llu vadEvents=%llu ttsState=%s\n",
                 static_cast<unsigned long long>(rt.cleanQueue().stats().produced),
-                static_cast<unsigned long long>(rt.vadEventQueue().stats().produced));
+                static_cast<unsigned long long>(rt.vadEventQueue().stats().produced),
+                rt.ttsState().isActive() ? "ACTIVE" : "idle");
     return 0;
 }

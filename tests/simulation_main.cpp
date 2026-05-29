@@ -29,7 +29,7 @@ static void printFinalStats(const char* label, const RuntimeStats& s) {
 
 int main() {
     std::printf("=== voice_runtime simulation ===\n");
-    std::printf("Press 'b' + Enter to trigger manual barge-in\n");
+    std::printf("Press 'b' + Enter to trigger manual barge-in (only during TTS)\n");
     std::printf("Running for 15 seconds...\n\n");
 
     // -----------------------------------------------------------------------
@@ -62,7 +62,6 @@ int main() {
     cfg.speakerQueueCapacity        = 128;
     cfg.cleanAudioQueueCapacity     = 128;
     cfg.sttTextQueueCapacity        = 512;
-    cfg.llmTextQueueCapacity        = 256;
 
     cfg.audioOverflowPolicy         = QueueOverflowPolicy::DropOldest;
     cfg.textOverflowPolicy          = QueueOverflowPolicy::DropOldest;
@@ -83,12 +82,12 @@ int main() {
     // Costruzione runtime
     // -----------------------------------------------------------------------
 
-    // Nodi simulati
     auto mic    = std::make_unique<SimulatedMicrophoneNode>(cfg.micRawFormat, 100, 256);
     auto aec    = std::make_unique<SimulatedAecNode>(256, 1);
     auto stt    = std::make_unique<SimulatedSttNode>(1);
-    auto barge  = std::make_unique<SimulatedBargeInNode>();
+    auto classf = std::make_unique<SimulatedClassifierBargeInNode>();
     auto llm    = std::make_unique<SimulatedLlmNode>(350);
+    auto interp = std::make_unique<SimulatedInterpreterNode>();
     auto tts    = std::make_unique<SimulatedTtsNode>(cfg.pipelineFormat, 256, 25);
     auto out    = std::make_unique<SimulatedAudioOutputNode>(1);
 
@@ -97,8 +96,9 @@ int main() {
         std::move(mic),
         std::move(aec),
         std::move(stt),
-        std::move(barge),
+        std::move(classf),
         std::move(llm),
+        std::move(interp),
         std::move(tts),
         std::move(out)
     );
@@ -126,15 +126,17 @@ int main() {
     // -----------------------------------------------------------------------
 
     std::printf("\n=== Final Stats ===\n");
-    printFinalStats("micRawQueue",    rt.micRawQueue().stats());
-    printFinalStats("micQueue",       rt.micQueue().stats());
-    printFinalStats("vadGatedQueue",  rt.vadGatedQueue().stats());
-    printFinalStats("cleanQueue",     rt.cleanQueue().stats());
-    printFinalStats("sttAdapted",     rt.sttAdaptedQueue().stats());
-    printFinalStats("sttTextQueue",   rt.sttTextQueue().stats());
-    printFinalStats("llmTextQueue",   rt.llmTextQueue().stats());
-    printFinalStats("speakerQueue",   rt.speakerQueue().stats());
-    printFinalStats("ttsRefQueue",    rt.ttsReferenceQueue().stats());
+    printFinalStats("micRawQueue",      rt.micRawQueue().stats());
+    printFinalStats("micQueue",         rt.micQueue().stats());
+    printFinalStats("vadGatedQueue",    rt.vadGatedQueue().stats());
+    printFinalStats("cleanQueue",       rt.cleanQueue().stats());
+    printFinalStats("sttAdapted",       rt.sttAdaptedQueue().stats());
+    printFinalStats("sttTextQueue",     rt.sttTextQueue().stats());
+    printFinalStats("classifierOut",    rt.classifierOutQueue().stats());
+    printFinalStats("llmOutputQueue",   rt.llmOutputQueue().stats());
+    printFinalStats("ttsInputQueue",    rt.ttsInputQueue().stats());
+    printFinalStats("speakerQueue",     rt.speakerQueue().stats());
+    printFinalStats("ttsRefQueue",      rt.ttsReferenceQueue().stats());
 
     std::printf("\nAudio pool: consumed=%llu recycled=%llu hwm=%zu\n",
                 static_cast<unsigned long long>(rt.audioPool().stats().consumed),
@@ -145,6 +147,8 @@ int main() {
                 rt.llmDiskBuffer().memorySnapshot().size());
     std::printf("LLM disk spool:    %s\n",
                 rt.llmDiskBuffer().path().c_str());
+    std::printf("TTS state:         %s\n",
+                rt.ttsState().isActive() ? "ACTIVE" : "idle");
 
     std::printf("\nDone.\n");
     return 0;

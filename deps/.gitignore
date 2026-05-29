@@ -2,6 +2,12 @@
 WebRTC/
 abseil-cpp/
 ggml/
+espeak-ng/
+kokoro.cpp/
+qwen3-asr.cpp/
+cpp-httplib/
+nlohmann-json/
+openssl/
 
 # Ignore build directories
 build_*/

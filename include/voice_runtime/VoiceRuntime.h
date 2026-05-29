@@ -26,43 +26,54 @@ enum class RuntimeState : int {
 
 // ---------------------------------------------------------------------------
 // VoiceRuntime
+//   Pipeline lineare unica:
+//   Mic → [MicAdapter?] → VAD → AEC → [SttAdapter?] → STT
+//       → Classifier/BargeIn → LLM → Interpreter → TTS → Output
+//
+//   I nodi commutano tra attivo e pass-through in base a TtsStateSignal.
 // ---------------------------------------------------------------------------
 
 class VoiceRuntime {
 public:
-    VoiceRuntime(RuntimeConfig                          config,
-                 std::unique_ptr<IMicrophoneNode>       microphone,
-                 std::unique_ptr<IAecDspNode>           aec,
-                 std::unique_ptr<ISpeechToTextNode>     stt,
-                 std::unique_ptr<IBargeInContextNode>   bargeIn,
-                 std::unique_ptr<ILanguageModelNode>    llm,
-                 std::unique_ptr<ITextToSpeechNode>     tts,
-                 std::unique_ptr<IAudioOutputNode>      output)
+    VoiceRuntime(RuntimeConfig                              config,
+                 std::unique_ptr<IMicrophoneNode>           microphone,
+                 std::unique_ptr<IAecDspNode>               aec,
+                 std::unique_ptr<ISpeechToTextNode>         stt,
+                 std::unique_ptr<IClassifierBargeInNode>    classifier,
+                 std::unique_ptr<ILanguageModelNode>        llm,
+                 std::unique_ptr<IInterpreterNode>          interpreter,
+                 std::unique_ptr<ITextToSpeechNode>         tts,
+                 std::unique_ptr<IAudioOutputNode>          output)
         : cfg_(std::move(config))
         , audioPool_(cfg_.audioPoolBuffers)
         // --- code audio ---
         , micRawQueue_  (cfg_.micRawQueueCapacity,       cfg_.audioOverflowPolicy, "micRaw")
         , micQueue_     (cfg_.micQueueCapacity,          cfg_.audioOverflowPolicy, "micAdapted")
-        , vadGatedQueue_(cfg_.vadGatedQueueCapacity,     cfg_.audioOverflowPolicy, "vadGated")
-        , ttsRefQueue_  (cfg_.ttsReferenceQueueCapacity, cfg_.audioOverflowPolicy, "ttsRef")
-        , speakerQueue_ (cfg_.speakerQueueCapacity,      cfg_.audioOverflowPolicy, "speaker")
+        , vadGatedQueue_(cfg_.vadGatedQueueCapacity,     cfg_.audioOverflowPolicy, "vadOut")
+        , ttsRefQueue_  (16, QueueOverflowPolicy::BlockProducer, "ttsRef")
+        , speakerQueue_ (16, QueueOverflowPolicy::BlockProducer, "speaker")
         , cleanQueue_   (cfg_.cleanAudioQueueCapacity,   cfg_.audioOverflowPolicy, "cleanAudio")
         , sttAdaptedQueue_(cfg_.sttAdaptedQueueCapacity, cfg_.audioOverflowPolicy, "sttAdapted")
         // --- code testo ed eventi ---
-        , sttTextQueue_ (cfg_.sttTextQueueCapacity,      cfg_.textOverflowPolicy,  "sttText")
-        , llmTextQueue_ (cfg_.llmTextQueueCapacity,      cfg_.textOverflowPolicy,  "llmText")
-        , vadEventQueue_(cfg_.vadEventQueueCapacity,     QueueOverflowPolicy::DropOldest, "vadEvents")
-        , bargeInQueue_ (cfg_.bargeInEventQueueCapacity, QueueOverflowPolicy::DropOldest, "bargeIn")
+        , sttTextQueue_       (cfg_.sttTextQueueCapacity,       cfg_.textOverflowPolicy,  "sttText")
+        , classifierOutQueue_ (cfg_.classifierOutQueueCapacity, cfg_.textOverflowPolicy,  "classOut")
+        , llmOutputQueue_     (cfg_.llmOutputQueueCapacity,     cfg_.textOverflowPolicy,  "llmOut")
+        , ttsInputQueue_      (cfg_.ttsInputQueueCapacity,      cfg_.textOverflowPolicy,  "ttsIn")
+        , vadEventQueue_      (cfg_.vadEventQueueCapacity,      QueueOverflowPolicy::DropOldest, "vadEvents")
+        , bargeInQueue_       (cfg_.bargeInEventQueueCapacity,  QueueOverflowPolicy::DropOldest, "bargeIn")
         // --- buffer LLM ---
         , llmDiskBuffer_(cfg_.llmDiskSpoolPath, cfg_.llmMemoryWindowBytes)
+        // --- buffer overlap ---
+        , overlapBuffer_(cfg_.overlapCommentBufferBytes, cfg_.overlapBufferUnbounded)
         // --- nodi ---
-        , microphone_(std::move(microphone))
-        , aec_        (std::move(aec))
-        , stt_        (std::move(stt))
-        , bargeIn_    (std::move(bargeIn))
-        , llm_        (std::move(llm))
-        , tts_        (std::move(tts))
-        , output_     (std::move(output))
+        , microphone_  (std::move(microphone))
+        , aec_         (std::move(aec))
+        , stt_         (std::move(stt))
+        , classifier_  (std::move(classifier))
+        , llm_         (std::move(llm))
+        , interpreter_ (std::move(interpreter))
+        , tts_         (std::move(tts))
+        , output_      (std::move(output))
     {
         buildAdapters();
     }
@@ -70,14 +81,17 @@ public:
     ~VoiceRuntime() { stop(); }
 
     // -----------------------------------------------------------------------
-    // initialize
+    // initialize — wiring della pipeline lineare
     // -----------------------------------------------------------------------
 
     bool initialize() {
         const int expected = static_cast<int>(RuntimeState::Idle);
         if (state_.load() != expected) return false;
 
-        // Mic → [micAdapter?] → VAD/AEC
+        // ===================================================================
+        // 1. Mic → [MicAdapter?] → micQueue
+        // ===================================================================
+
         const bool needMicAdapter =
             cfg_.enableMicAdapter &&
             (cfg_.micRawFormat != cfg_.pipelineFormat);
@@ -90,12 +104,26 @@ public:
             microphone_->setOutputQueue(&micQueue_);
         }
 
-        // VAD (opzionale) → AEC
-        if (cfg_.enableVad && vad_) {
+        // ===================================================================
+        // 2. micQueue → VAD → vadGatedQueue (or integrated VAD in DSP)
+        // ===================================================================
+
+        const bool useIntegratedVad = cfg_.enableIntegratedDspVad && (dynamic_cast<IVadNode*>(aec_.get()) != nullptr);
+        const bool useExternalVad = cfg_.enableVad && vad_ && !useIntegratedVad;
+
+        if (useExternalVad) {
             vad_->setInputQueue(&micQueue_);
             vad_->setOutputQueue(&vadGatedQueue_);
             vad_->setEventQueue(&vadEventQueue_);
             vad_->setSpeechThreshold(cfg_.vadSpeechThreshold);
+            vad_->setTtsStateSignal(&ttsState_);
+        }
+
+        // ===================================================================
+        // 3. vadGatedQueue/micQueue → AEC → cleanQueue
+        // ===================================================================
+
+        if (useExternalVad) {
             aec_->setCaptureInputQueue(&vadGatedQueue_);
         } else {
             aec_->setCaptureInputQueue(&micQueue_);
@@ -103,15 +131,18 @@ public:
 
         aec_->setRenderInputQueue(&ttsRefQueue_);
         aec_->setOutputQueue(&cleanQueue_);
+        aec_->setTtsStateSignal(&ttsState_);
 
-        // Se il nodo AEC/DSP integra anche VAD, gli passiamo gli eventi qui.
-        // Nei nodi che non supportano VAD questi metodi sono no-op.
+        // Se il nodo AEC/DSP integra anche VAD, gli passiamo gli eventi.
         if (cfg_.enableVad) {
             aec_->setVadEventQueue(&vadEventQueue_);
             aec_->setSpeechThreshold(cfg_.vadSpeechThreshold);
         }
 
-        // AEC → [sttAdapter?] → STT
+        // ===================================================================
+        // 4. cleanQueue → [SttAdapter?] → STT → sttTextQueue
+        // ===================================================================
+
         const bool needSttAdapter =
             cfg_.enableSttAdapter &&
             (cfg_.pipelineFormat != cfg_.sttInputFormat);
@@ -126,38 +157,63 @@ public:
 
         stt_->setOutputQueue(&sttTextQueue_);
 
-        // STT → [BargeIn?] → LLM
-        if (cfg_.enableBargeIn && bargeIn_) {
-            bargeIn_->setTextInputQueue(&sttTextQueue_);
-            bargeIn_->setTextOutputQueue(&llmTextQueue_);
-            bargeIn_->setBargeInEventQueue(&bargeInQueue_);
-            bargeIn_->setTtsInterruptSignal(&ttsInterrupt_);
-            bargeIn_->setLlmInterruptSignal(&llmInterrupt_);
-            llm_->setInputQueue(&llmTextQueue_);
-        } else {
-            llm_->setInputQueue(&sttTextQueue_);
-        }
+        // ===================================================================
+        // 5. sttTextQueue → Classifier/BargeIn → classifierOutQueue
+        // ===================================================================
 
-        llm_->setOutputQueue(&llmTextQueue_);
+        classifier_->setTextInputQueue(&sttTextQueue_);
+        classifier_->setTextOutputQueue(&classifierOutQueue_);
+        classifier_->setBargeInEventQueue(&bargeInQueue_);
+        classifier_->setTtsInterruptSignal(&ttsInterrupt_);
+        classifier_->setLlmInterruptSignal(&llmInterrupt_);
+        classifier_->setTtsStateSignal(&ttsState_);
+        classifier_->setOverlapBuffer(&overlapBuffer_);
+
+        // ===================================================================
+        // 6. classifierOutQueue → LLM → llmOutputQueue
+        // ===================================================================
+
+        llm_->setInputQueue(&classifierOutQueue_);
+        llm_->setOutputQueue(&llmOutputQueue_);
         llm_->setPersistentInputBuffer(&llmDiskBuffer_);
         llm_->setInterruptSignal(&llmInterrupt_);
 
-        tts_->setInputQueue(&llmTextQueue_);
+        // ===================================================================
+        // 7. llmOutputQueue → Interpreter → ttsInputQueue
+        // ===================================================================
+
+        interpreter_->setInputQueue(&llmOutputQueue_);
+        interpreter_->setOutputQueue(&ttsInputQueue_);
+
+        // ===================================================================
+        // 8. ttsInputQueue → TTS → speakerQueue + ttsRefQueue
+        // ===================================================================
+
+        tts_->setInputQueue(&ttsInputQueue_);
         tts_->setSpeakerOutputQueue(&speakerQueue_);
         tts_->setAecReferenceOutputQueue(&ttsRefQueue_);
         tts_->setInterruptSignal(&ttsInterrupt_);
+        tts_->setTtsStateSignal(&ttsState_);
+
+        // ===================================================================
+        // 9. speakerQueue → AudioOutput
+        // ===================================================================
 
         output_->setInputQueue(&speakerQueue_);
+
+        // Inizializza tutti i nodi
+        // ===================================================================
 
         const bool ok =
             microphone_->initialize() &&
             aec_->initialize()        &&
             stt_->initialize()        &&
+            classifier_->initialize() &&
             llm_->initialize()        &&
+            interpreter_->initialize()&&
             tts_->initialize()        &&
             output_->initialize()     &&
-            (!vad_      || vad_->initialize())      &&
-            (!bargeIn_  || bargeIn_->initialize())  &&
+            (!useExternalVad || vad_->initialize())       &&
             (!micAdapter_|| micAdapter_->initialize()) &&
             (!sttAdapter_|| sttAdapter_->initialize());
 
@@ -176,15 +232,20 @@ public:
 
         if (cfg_.printMetrics) setupMetrics();
 
+        const bool useIntegratedVad = cfg_.enableIntegratedDspVad && (dynamic_cast<IVadNode*>(aec_.get()) != nullptr);
+        const bool useExternalVad = cfg_.enableVad && vad_ && !useIntegratedVad;
+
+        // Avvia i nodi dal fondo della pipeline verso la sorgente
         output_->start();
-        aec_->start();
-        stt_->start();
-        if (cfg_.enableBargeIn && bargeIn_) bargeIn_->start();
-        llm_->start();
         tts_->start();
-        if (cfg_.enableVad && vad_) vad_->start();
-        if (micAdapter_) micAdapter_->start();
+        interpreter_->start();
+        llm_->start();
+        classifier_->start();
+        stt_->start();
+        aec_->start();
+        if (useExternalVad) vad_->start();
         if (sttAdapter_) sttAdapter_->start();
+        if (micAdapter_) micAdapter_->start();
         microphone_->start();
 
         if (metrics_) metrics_->start();
@@ -200,29 +261,35 @@ public:
                 static_cast<int>(RuntimeState::Stopping)))
             return;
 
+        // 1. Ferma metriche
         if (metrics_) metrics_->stop();
 
-        // 1. Chiudi tutte le code — sblocca producer e consumer
+        // 2. Chiudi tutte le code — sblocca producer e consumer
         stopAllQueues();
 
-        // 2. Ferma i nodi
+        const bool useIntegratedVad = cfg_.enableIntegratedDspVad && (dynamic_cast<IVadNode*>(aec_.get()) != nullptr);
+        const bool useExternalVad = cfg_.enableVad && vad_ && !useIntegratedVad;
+
+        // 3. Ferma i nodi (dalla sorgente al fondo)
         microphone_->stop();
         if (micAdapter_) micAdapter_->stop();
-        if (vad_)        vad_->stop();
-        tts_->stop();
-        if (cfg_.enableBargeIn && bargeIn_) bargeIn_->stop();
-        llm_->stop();
-        stt_->stop();
-        if (sttAdapter_) sttAdapter_->stop();
+        if (useExternalVad) vad_->stop();
         aec_->stop();
+        if (sttAdapter_) sttAdapter_->stop();
+        stt_->stop();
+        classifier_->stop();
+        llm_->stop();
+        interpreter_->stop();
+        tts_->stop();
         output_->stop();
 
-        // 3. Svuota le code (rilascia shared_ptr prima che i pool vengano distrutti)
+        // 4. Svuota le code (rilascia shared_ptr prima che i pool vengano distrutti)
         clearAllQueues();
 
-        // 4. Ferma i pool condivisi del runtime
+        // 5. Ferma i pool condivisi del runtime
         audioPool_.stop();
 
+        // 6. Flush buffer su disco
         llmDiskBuffer_.flush();
 
         state_.store(static_cast<int>(RuntimeState::Stopped));
@@ -240,21 +307,25 @@ public:
     // Accessori
     // -----------------------------------------------------------------------
 
-    AudioFrameQueue&     micRawQueue()         { return micRawQueue_;   }
-    AudioFrameQueue&     micQueue()            { return micQueue_;      }
-    AudioFrameQueue&     vadGatedQueue()       { return vadGatedQueue_; }
-    AudioFrameQueue&     ttsReferenceQueue()   { return ttsRefQueue_;   }
-    AudioFrameQueue&     speakerQueue()        { return speakerQueue_;  }
-    AudioFrameQueue&     cleanQueue()          { return cleanQueue_;    }
-    AudioFrameQueue&     sttAdaptedQueue()     { return sttAdaptedQueue_;}
-    TextQueue&           sttTextQueue()        { return sttTextQueue_;  }
-    TextQueue&           llmTextQueue()        { return llmTextQueue_;  }
-    VadEventQueue&       vadEventQueue()       { return vadEventQueue_; }
-    BargeInQueue&        bargeInQueue()        { return bargeInQueue_;  }
-    DiskBackedTextBuffer& llmDiskBuffer()      { return llmDiskBuffer_; }
-    InterruptSignal&     ttsInterrupt()        { return ttsInterrupt_;  }
-    InterruptSignal&     llmInterrupt()        { return llmInterrupt_;  }
-    SharedBufferPool<AudioFrame>& audioPool()  { return audioPool_;     }
+    AudioFrameQueue&     micRawQueue()           { return micRawQueue_;        }
+    AudioFrameQueue&     micQueue()              { return micQueue_;           }
+    AudioFrameQueue&     vadGatedQueue()         { return vadGatedQueue_;      }
+    AudioFrameQueue&     ttsReferenceQueue()     { return ttsRefQueue_;        }
+    AudioFrameQueue&     speakerQueue()          { return speakerQueue_;       }
+    AudioFrameQueue&     cleanQueue()            { return cleanQueue_;         }
+    AudioFrameQueue&     sttAdaptedQueue()       { return sttAdaptedQueue_;    }
+    TextQueue&           sttTextQueue()          { return sttTextQueue_;       }
+    TextQueue&           classifierOutQueue()    { return classifierOutQueue_; }
+    TextQueue&           llmOutputQueue()        { return llmOutputQueue_;     }
+    TextQueue&           ttsInputQueue()         { return ttsInputQueue_;      }
+    VadEventQueue&       vadEventQueue()         { return vadEventQueue_;      }
+    BargeInQueue&        bargeInQueue()          { return bargeInQueue_;       }
+    DiskBackedTextBuffer& llmDiskBuffer()        { return llmDiskBuffer_;      }
+    RollingTextBuffer&   overlapBuffer()         { return overlapBuffer_;      }
+    InterruptSignal&     ttsInterrupt()          { return ttsInterrupt_;       }
+    InterruptSignal&     llmInterrupt()          { return llmInterrupt_;       }
+    TtsStateSignal&      ttsState()              { return ttsState_;           }
+    SharedBufferPool<AudioFrame>& audioPool()    { return audioPool_;          }
 
     RuntimeState runtimeState() const {
         return static_cast<RuntimeState>(state_.load());
@@ -293,7 +364,9 @@ private:
         metrics_->addQueue(cleanQueue_);
         metrics_->addQueue(sttAdaptedQueue_);
         metrics_->addQueue(sttTextQueue_);
-        metrics_->addQueue(llmTextQueue_);
+        metrics_->addQueue(classifierOutQueue_);
+        metrics_->addQueue(llmOutputQueue_);
+        metrics_->addQueue(ttsInputQueue_);
         metrics_->addQueue(speakerQueue_);
         metrics_->addQueue(ttsRefQueue_);
         metrics_->addQueue(vadEventQueue_);
@@ -304,10 +377,11 @@ private:
             const std::size_t poolFree = audioPool_.freeCount();
             const std::size_t poolCap  = audioPool_.capacity();
             const std::size_t diskBytes= llmDiskBuffer_.memorySnapshot().size();
+            const bool ttsActive = ttsState_.isActive();
             std::snprintf(buf, sizeof(buf),
-                "pool=%zu/%zu free | llmMem=%zu B | dspVad=%s | ttsInt=%s | llmInt=%s",
+                "pool=%zu/%zu free | llmMem=%zu B | tts=%s | ttsInt=%s | llmInt=%s",
                 poolFree, poolCap, diskBytes,
-                aec_ && aec_->isSpeaking() ? "speech" : "silence",
+                ttsActive ? "ACTIVE" : "idle",
                 ttsInterrupt_.check() ? "ACTIVE" : "idle",
                 llmInterrupt_.check() ? "ACTIVE" : "idle");
             return buf;
@@ -323,7 +397,9 @@ private:
         cleanQueue_.stop();
         sttAdaptedQueue_.stop();
         sttTextQueue_.stop();
-        llmTextQueue_.stop();
+        classifierOutQueue_.stop();
+        llmOutputQueue_.stop();
+        ttsInputQueue_.stop();
         vadEventQueue_.stop();
         bargeInQueue_.stop();
     }
@@ -337,7 +413,9 @@ private:
         cleanQueue_.clear();
         sttAdaptedQueue_.clear();
         sttTextQueue_.clear();
-        llmTextQueue_.clear();
+        classifierOutQueue_.clear();
+        llmOutputQueue_.clear();
+        ttsInputQueue_.clear();
         vadEventQueue_.clear();
         bargeInQueue_.clear();
     }
@@ -353,39 +431,46 @@ private:
     // Code audio
     AudioFrameQueue     micRawQueue_;
     AudioFrameQueue     micQueue_;
-    AudioFrameQueue     vadGatedQueue_;
+    AudioFrameQueue     vadGatedQueue_;     // VAD → AEC
     AudioFrameQueue     ttsRefQueue_;
     AudioFrameQueue     speakerQueue_;
-    AudioFrameQueue     cleanQueue_;
+    AudioFrameQueue     cleanQueue_;        // AEC → STT
     AudioFrameQueue     sttAdaptedQueue_;
 
     // Code testo/eventi
-    TextQueue           sttTextQueue_;
-    TextQueue           llmTextQueue_;
+    TextQueue           sttTextQueue_;       // STT → Classifier
+    TextQueue           classifierOutQueue_; // Classifier → LLM
+    TextQueue           llmOutputQueue_;     // LLM → Interpreter
+    TextQueue           ttsInputQueue_;      // Interpreter → TTS
     VadEventQueue       vadEventQueue_;
     BargeInQueue        bargeInQueue_;
 
     // Buffer LLM
     DiskBackedTextBuffer llmDiskBuffer_;
 
-    // Segnali di interrupt
+    // Buffer overlap — commenti utente durante TTS
+    RollingTextBuffer   overlapBuffer_;
+
+    // Segnali
     InterruptSignal     ttsInterrupt_;
     InterruptSignal     llmInterrupt_;
+    TtsStateSignal      ttsState_;
 
     // Nodi
-    std::unique_ptr<IMicrophoneNode>       microphone_;
-    std::unique_ptr<IAudioFormatAdapterNode> micAdapter_;
-    std::unique_ptr<IVadNode>              vad_;
-    std::unique_ptr<IAecDspNode>           aec_;
-    std::unique_ptr<IAudioFormatAdapterNode> sttAdapter_;
-    std::unique_ptr<ISpeechToTextNode>     stt_;
-    std::unique_ptr<IBargeInContextNode>   bargeIn_;
-    std::unique_ptr<ILanguageModelNode>    llm_;
-    std::unique_ptr<ITextToSpeechNode>     tts_;
-    std::unique_ptr<IAudioOutputNode>      output_;
+    std::unique_ptr<IMicrophoneNode>             microphone_;
+    std::unique_ptr<IAudioFormatAdapterNode>     micAdapter_;
+    std::unique_ptr<IVadNode>                    vad_;
+    std::unique_ptr<IAecDspNode>                 aec_;
+    std::unique_ptr<IAudioFormatAdapterNode>     sttAdapter_;
+    std::unique_ptr<ISpeechToTextNode>           stt_;
+    std::unique_ptr<IClassifierBargeInNode>      classifier_;
+    std::unique_ptr<ILanguageModelNode>          llm_;
+    std::unique_ptr<IInterpreterNode>            interpreter_;
+    std::unique_ptr<ITextToSpeechNode>           tts_;
+    std::unique_ptr<IAudioOutputNode>            output_;
 
     // Metriche
-    std::unique_ptr<MetricsReporter>       metrics_;
+    std::unique_ptr<MetricsReporter>             metrics_;
 };
 
 } // namespace voice_runtime
