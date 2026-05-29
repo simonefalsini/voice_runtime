@@ -6,7 +6,7 @@ espeak-ng/
 kokoro.cpp/
 qwen3-asr.cpp/
 cpp-httplib/
-nlohmann-json/
+json/
 openssl/
 
 # Ignore build directories
