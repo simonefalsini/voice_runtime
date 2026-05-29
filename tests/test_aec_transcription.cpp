@@ -212,11 +212,14 @@ int main(int argc, char* argv[]) {
     VadEventQueue vadEventQueue(64, QueueOverflowPolicy::DropOldest, "vadEvents");
     // TTS → AEC (render reference, 16kHz).
     // FIX Bug3: capacity reduced from 256 to 32 frames (320ms @ 10ms/frame).
-    // A large capacity allows the TTS to pre-fill the queue with seconds of
-    // reference audio ahead of playback, creating an offset the static
-    // estimatedRenderDelayMs cannot compensate. 32 frames keeps the buffering
-    // within the range of AEC3's internal delay estimator (~300ms).
-    AudioFrameQueue aecRefQueue(32, QueueOverflowPolicy::BlockProducer, "aecRefQueue");
+    // DropNewest is intentional: the TTS must NEVER block on the AEC reference queue.
+    // If the DSP thread falls behind, the oldest reference (closest to mic capture) is
+    // kept and the newest surplus frames are dropped — a marginal AEC quality trade-off
+    // that is far less damaging than starving the speaker queue and producing silence
+    // (which would prevent AEC convergence entirely). 64 frames = 640ms @ 10ms/frame,
+    // comfortably covering typical ONNX synthesis latency without creating an offset
+    // large enough to defeat AEC3's internal delay estimator (~500ms range).
+    AudioFrameQueue aecRefQueue(64, QueueOverflowPolicy::DropNewest, "aecRefQueue");
     // TTS → speaker output (24kHz)
     AudioFrameQueue speakerQueue(256, QueueOverflowPolicy::BlockProducer, "speakerQueue");
     // TTS text input

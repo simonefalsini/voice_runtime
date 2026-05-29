@@ -276,24 +276,30 @@ private:
     void drainRenderQueue() {
         if (!refIn_) return;
         AudioFrameHandle ref;
-        // FIX Bug1: loop to drain ALL available render frames, not just one.
-        // The AEC3 filter requires the render stream to be fully consumed before
-        // each capture frame so it can estimate and cancel the echo correctly.
-        while (refIn_->tryPop(ref)) {
-            // FIX Bug5: validate render frame format — abort on mismatch.
+
+        if (refIn_->tryPop(ref)) {
             // A format mismatch between render and capture streams causes silent
-            // AEC failure (wrong delay estimation, wrong sample count). This is
-            // a non-recoverable configuration error and must be surfaced immediately.
+            // AEC failure (wrong delay estimation, wrong sample count).
             if (!validateRenderFormat(*ref)) {
-                std::fprintf(stderr,
-                    "[WebRtcDSP] FATAL: render frame format mismatch "
-                    "(expected %dHz/%dch/%dms, got %dHz/%dch/%dms). Aborting.\n",
-                    cfg_.format.sampleRate, cfg_.format.channels, cfg_.format.frameMs,
-                    ref->format.sampleRate, ref->format.channels, ref->format.frameMs);
-                std::abort();
+                const int errs = ++renderFormatErrors_;
+                if (errs <= 5 || errs % 100 == 0) {
+                    std::fprintf(stderr,
+                        "[WebRtcDSP] ERROR: render frame format mismatch "
+                        "(expected %dHz/%dch/%dms, got %dHz/%dch/%dms) "
+                        "— frame skipped (total errors: %d)\n",
+                        cfg_.format.sampleRate, cfg_.format.channels, cfg_.format.frameMs,
+                        ref->format.sampleRate, ref->format.channels, ref->format.frameMs,
+                        errs);
+                }
+                ref.reset();
             }
-            processRenderFrame(*ref);
-            ref.reset();
+            else
+            {
+                processRenderFrame(*ref);
+                ref.reset();
+
+            }
+
         }
     }
 
@@ -490,6 +496,11 @@ private:
     // FIX Bug6+4.1: preallocated destination buffers — eliminate heap alloc in RT path
     std::vector<int16_t> renderDestI16_;   // output for ProcessReverseStream (discarded)
     std::vector<int16_t> captureDestI16_;  // output for ProcessStream → copied to AudioFrame
+
+    // Diagnostic counter: render frames skipped due to format mismatch in drainRenderQueue().
+    // Replaces the former std::abort() (Bug 5 fix). Incremented atomically; logged at first 5
+    // occurrences and every 100 thereafter to avoid log spam.
+    std::atomic<int> renderFormatErrors_{0};
 
 #if VOICE_RUNTIME_ENABLE_WEBRTC_APM
     webrtc::scoped_refptr<webrtc::AudioProcessing> apm_;
