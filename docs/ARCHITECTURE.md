@@ -74,7 +74,7 @@ a `TtsStateSignal`, un `std::atomic<bool>` condiviso gestito dal nodo TTS:
 include/voice_runtime/
     AudioTypes.h          tipi base, AudioFrame, VadEvent, BargeInEvent, InterruptSignal, TtsStateSignal
     ActiveNode.h          IActiveNode, ActiveNodeBase (thread naming, priorita' RT)
-    BoundedQueue.h        BoundedQueue<T> con DropCallback, QueueSnapshot, tryPop()
+    BoundedQueue.h        BoundedQueue<T> — contatori atomici, DropCallback senza re-lock, tryPop()
     SharedBufferPool.h    pool preallocato con acquireWithTimeout()
     TextBuffer.h          RollingTextBuffer (rolling/unbounded), DiskBackedTextBuffer
     Interfaces.h          tutte le interfacce dei nodi
@@ -84,12 +84,18 @@ include/voice_runtime/
     VoiceRuntime.h        orchestratore principale, state machine, wiring
 
 nodes/
-    WebRtcDspNode.h       nodo AEC basato su WebRTC APM (con pass-through stub)
+    WebRtcDspNode.h       nodo AEC3+NS+VAD (WebRTC APM): double drain, zero-alloc RT, format abort
+    KokoroTtsNode.h       TTS Kokoro con downsampler 24->16kHz integrato per AEC reference
+    WasapiMicNode.h       cattura audio Windows WASAPI, event-driven              [WIN32 only]
+    WasapiOutputNode.h    riproduzione audio Windows WASAPI, event-driven          [WIN32 only]
 
 tests/
-    SimulatedNodes.h      implementazioni simulate di tutti i nodi
-    simulation_main.cpp   simulazione pipeline completa
+    SimulatedNodes.h                 implementazioni simulate di tutti i nodi
+    simulation_main.cpp              simulazione pipeline completa
     simulation_main_webrtc_dsp.cpp   simulazione con WebRTC DSP
+    test_aec_transcription.cpp       test full-duplex AEC+STT (aecRefQueue 32 frame)
+    test_wasapi_mic.cpp              cattura mic WASAPI: 5s, verifica >= 450 frame
+    test_wasapi_output.cpp           output WASAPI: 440Hz, verifica dropped == 0
 ```
 
 ---
@@ -188,6 +194,42 @@ parsing del formato di output dell'LLM.
 
 ---
 
+## AEC — Allineamento Render/Capture (Drain Doppio)
+
+La corretta convergenza di AEC3 richiede che ogni frame di cattura (microfono) sia
+preceduto da **tutti** i frame di riferimento (TTS) corrispondenti. Il pattern di
+drain nel `WebRtcDspNode` e' il seguente:
+
+```
+while running:
+    drainRenderQueue()        ← PRIMA del pop bloccante
+    pop mic frame (bloccante)
+    drainRenderQueue()        ← DOPO il pop bloccante
+    processCaptureFrame(mic)
+    pushCleanFrame()
+```
+
+`drainRenderQueue()` usa un ciclo `while (tryPop())` — non `if` — per consumare
+tutti i frame TTS disponibili, non solo uno per ciclo.
+
+### Validazione formato AEC reference (Bug 5)
+
+Se un frame di riferimento ha formato incompatibile con la configurazione AEC
+(diversi `sampleRate`, `channels` o `frameMs`), il nodo chiama `std::abort()`.
+Questo e' un errore grave non recuperabile: formati non corrispondenti causano
+corruzione silenziosa del filtro AEC3.
+
+### Capacita' aecRefQueue consigliata
+
+La coda `aecRefQueue` (TTS→AEC) deve avere capacita' **<= 32 frame** a 10ms/frame
+(= 320ms). Capacita' superiori permettono al TTS di fare pre-fill eccessivo, creando
+un offset fisso che il delay estimator interno di AEC3 non riesce a compensare.
+
+```cpp
+// Corretto:
+AudioFrameQueue aecRefQueue(32, QueueOverflowPolicy::BlockProducer, "aecRefQueue");
+```
+
 ## AEC Warm-up
 
 Quando il TTS si attiva, l'AEC necessita di ~100-200ms per costruire il modello
@@ -231,9 +273,26 @@ Metodi principali:
 - `tryPop(T&)` — non bloccante, ritorna false se vuoto
 - `stop()` — sblocca tutti i thread in attesa
 - `clear()` — svuota la coda
-- `snapshot()` — snapshot atomico delle metriche
+- `stats()` / `snapshot()` — legge contatori senza acquisire il mutex della coda
 
 `tryPop()` e' fondamentale per il drain non-bloccante della render queue nell'AEC.
+
+### Contatori atomici (Fix 4.6)
+
+I contatori `produced`, `consumed`, `dropped` sono `std::atomic<uint64_t>` separati
+dal mutex della coda. `MetricsReporter` (e qualunque altro osservatore) li legge con
+`memory_order_relaxed` senza mai bloccare i thread produttore/consumatore.
+
+Solo `highWatermark` rimane sotto mutex (dipende dalla taglia istantanea della coda).
+
+### DropCallback senza re-lock (Fix 4.4)
+
+La `DropCallback` e' fissa per tutta l'esecuzione (impostata prima di `start()`).
+`invokeDropCallback()` controlla un flag atomico `hasDropCallback_` senza acquisire
+il mutex, eliminando una contesa inutile nel path di overflow.
+
+**Precondizione:** `setDropCallback()` deve essere chiamato prima di `start()` su
+qualunque nodo che usa la coda.
 
 ---
 
@@ -307,6 +366,62 @@ Idle --[initialize+start]--> Running --[stop]--> Stopping --> Stopped
 
 ---
 
+## Nodi Audio Windows (WASAPI)
+
+`WasapiMicNode` e `WasapiOutputNode` sono implementazioni Windows-native dei nodi
+audio, basate su WASAPI (Windows Audio Session API). Sono intercambiabili con i
+nodi miniaudio/simulati grazie alle stesse interfacce (`IMicrophoneNode`,
+`IAudioOutputNode`).
+
+### Caratteristiche comuni
+
+- Thread di acquisizione/render dedicato separato da `runLoop`
+- Event-driven: `SetEventHandle` + `WaitForMultipleObjects` — zero busy-wait
+- COM lifecycle gestito nel thread worker (`CoInitializeEx` / `CoUninitialize`)
+- SHARED mode default; EXCLUSIVE opzionale via `enableExclusiveMode = true`
+- Resampling lineare se il device non supporta il sample rate target
+  (provvisorio — da sostituire con `r8brain` in produzione)
+- Guard di compilazione: `#if !defined(_WIN32) #error` in entrambi i file
+
+### WasapiMicNode
+
+```cpp
+struct WasapiMicConfig {
+    AudioFormat format = {16000, 1, 10, SampleFormat::Int16};
+    bool enableExclusiveMode = false;
+    bool enableDcRemoval     = true;
+    std::size_t poolSize     = 256;
+    std::wstring deviceId    = L"";   // L"" = default device
+};
+```
+
+Cattura da `IAudioCaptureClient`, converte a Int16 mono, applica DC removal opzionale,
+accumula campioni e spezza in frame da `frameMs` ms.
+
+### WasapiOutputNode
+
+```cpp
+struct WasapiOutputConfig {
+    AudioFormat format = {24000, 1, 10, SampleFormat::Int16};
+    bool enableExclusiveMode  = false;
+    std::size_t prebufferFrames = 5;   // frame di silenzio pre-start
+    std::wstring deviceId       = L"";
+};
+```
+
+Consuma frame da `AudioFrameQueue`, converte Int16→Float32 se necessario, esegue
+resampling verso il device rate, gestisce underrun con frame di silenzio.
+
+### Abilitazione CMake
+
+```cmake
+cmake -B build -S . -DVOICE_RUNTIME_ENABLE_WASAPI=ON
+```
+
+Le librerie di sistema `ole32`, `oleaut32`, `ksuser` sono linkate automaticamente.
+
+---
+
 ## Build
 
 ```bash
@@ -326,4 +441,18 @@ cmake -S . -B build-webrtc \
   -DVOICE_RUNTIME_WEBRTC_ROOT=/path/to/webrtc/src \
   -DVOICE_RUNTIME_WEBRTC_LIB=/path/to/libwebrtc.a
 cmake --build build-webrtc -j
+```
+
+### Build con WebRTC APM + WASAPI (Windows)
+
+```powershell
+cmake -B build-real -S . `
+  -DCMAKE_BUILD_TYPE=Release `
+  -DVOICE_RUNTIME_ENABLE_WEBRTC_APM=ON `
+  -DVOICE_RUNTIME_WEBRTC_ROOT=C:/path/to/webrtc/src `
+  -DVOICE_RUNTIME_WEBRTC_LIB=C:/path/to/webrtc.lib `
+  -DVOICE_RUNTIME_ENABLE_WASAPI=ON
+cmake --build build-real -j4
+.\build-real\test_wasapi_mic.exe
+.\build-real\test_wasapi_output.exe
 ```
