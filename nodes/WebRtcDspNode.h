@@ -122,9 +122,6 @@ public:
         const int samples = cfg_.format.totalSamplesPerFrame();
         renderScratchI16_.resize(static_cast<std::size_t>(samples));
         captureScratchI16_.resize(static_cast<std::size_t>(samples));
-        // per-frame heap allocations in processRenderFrame / processCaptureFrame.
-        renderDestI16_.resize(static_cast<std::size_t>(samples));
-        captureDestI16_.resize(static_cast<std::size_t>(samples));
 
 #if VOICE_RUNTIME_ENABLE_WEBRTC_VAD
         if (cfg_.enableVad) {
@@ -275,14 +272,6 @@ private:
         }
     }
 
-
-    // configured capture format (same sample rate, channel count and frame duration).
-    bool validateRenderFormat(const AudioFrame& frame) const {
-        return frame.format.sampleRate == cfg_.format.sampleRate
-            && frame.format.channels   == cfg_.format.channels
-            && frame.format.frameMs    == cfg_.format.frameMs;
-    }
-
     bool processRenderFrame(const AudioFrame& frame) {
 #if VOICE_RUNTIME_ENABLE_WEBRTC_APM
         if (!apm_) return false;
@@ -301,12 +290,9 @@ private:
             srcI16 = renderScratchI16_.data();
         }
 
+        std::vector<int16_t> destI16(samples);
         webrtc::StreamConfig streamCfg(frame.format.sampleRate, frame.format.channels);
-        // allocating a new vector on the heap every 10ms. The output of
-        // ProcessReverseStream is intentionally discarded (APM updates its
-        // internal state); we only need a valid writable destination pointer.
-        return apm_->ProcessReverseStream(srcI16, streamCfg, streamCfg,
-                                          renderDestI16_.data()) ==
+        return apm_->ProcessReverseStream(srcI16, streamCfg, streamCfg, destI16.data()) ==
                webrtc::AudioProcessing::kNoError;
 #else
         (void)frame;
@@ -335,23 +321,21 @@ private:
             srcI16 = captureScratchI16_.data();
         }
 
+        std::vector<int16_t> destI16(samples);
         webrtc::StreamConfig streamCfg(input.format.sampleRate, input.format.channels);
 
         apm_->set_stream_delay_ms(cfg_.estimatedRenderDelayMs);
 
-        const int rc = apm_->ProcessStream(srcI16, streamCfg, streamCfg,
-                                           captureDestI16_.data());
+        const int rc = apm_->ProcessStream(srcI16, streamCfg, streamCfg, destI16.data());
         if (rc != webrtc::AudioProcessing::kNoError) return false;
 
         if (output.format.sampleFormat == SampleFormat::Int16) {
-            output.pcm16.assign(captureDestI16_.begin(),
-                                captureDestI16_.begin() + samples);
+            output.pcm16 = std::move(destI16);
         } else {
             if (output.pcmF32.size() < static_cast<std::size_t>(samples))
                 output.pcmF32.resize(static_cast<std::size_t>(samples));
             for (int i = 0; i < samples; ++i)
-                output.pcmF32[static_cast<std::size_t>(i)] =
-                    captureDestI16_[static_cast<std::size_t>(i)] / 32768.0f;
+                output.pcmF32[static_cast<std::size_t>(i)] = destI16[i] / 32768.0f;
         }
         return true;
 #else
@@ -462,11 +446,6 @@ private:
     std::vector<int16_t> renderScratchI16_;
     std::vector<int16_t> captureScratchI16_;
     std::vector<int16_t> vadScratchI16_;
-    std::vector<int16_t> renderDestI16_;   // output for ProcessReverseStream (discarded)
-    std::vector<int16_t> captureDestI16_;  // output for ProcessStream → copied to AudioFrame
-
-    // Diagnostic counter: render frames skipped due to format mismatch in drainRenderQueue().
-    std::atomic<int> renderFormatErrors_{0};
 
 #if VOICE_RUNTIME_ENABLE_WEBRTC_APM
     webrtc::scoped_refptr<webrtc::AudioProcessing> apm_;
