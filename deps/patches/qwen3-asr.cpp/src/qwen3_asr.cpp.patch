@@ -1,13 +1,14 @@
 diff --git a/src/qwen3_asr.cpp b/src/qwen3_asr.cpp
-index c1321e3..4da2967 100644
+index c1321e3..c9075db 100644
 --- a/src/qwen3_asr.cpp
 +++ b/src/qwen3_asr.cpp
-@@ -18,10 +18,15 @@ static int64_t get_time_ms() {
+@@ -18,16 +18,26 @@ static int64_t get_time_ms() {
  Qwen3ASR::Qwen3ASR() = default;
  Qwen3ASR::~Qwen3ASR() = default;
  
 -bool Qwen3ASR::load_model(const std::string & model_path) {
 +bool Qwen3ASR::load_model(const std::string & model_path, const std::string & mmproj_path) {
++    std::printf("[Debug] Qwen3ASR::load_model start\n"); std::fflush(stdout);
      int64_t t_start = get_time_ms();
      
 -    if (!encoder_.load_model(model_path)) {
@@ -16,11 +17,21 @@ index c1321e3..4da2967 100644
 +        encoder_path = mmproj_path;
 +    }
 +    
++    std::printf("[Debug] Qwen3ASR::load_model: Loading audio encoder from %s...\n", encoder_path.c_str()); std::fflush(stdout);
 +    if (!encoder_.load_model(encoder_path)) {
          error_msg_ = "Failed to load audio encoder: " + encoder_.get_error();
++        std::printf("[Debug] Qwen3ASR::load_model: Audio encoder load failed\n"); std::fflush(stdout);
          return false;
      }
-@@ -35,6 +40,13 @@ bool Qwen3ASR::load_model(const std::string & model_path) {
+     
++    std::printf("[Debug] Qwen3ASR::load_model: Loading text decoder from %s...\n", model_path.c_str()); std::fflush(stdout);
+     if (!decoder_.load_model(model_path)) {
+         error_msg_ = "Failed to load text decoder: " + decoder_.get_error();
++        std::printf("[Debug] Qwen3ASR::load_model: Text decoder load failed\n"); std::fflush(stdout);
+         return false;
+     }
+     
+@@ -35,6 +45,13 @@ bool Qwen3ASR::load_model(const std::string & model_path) {
      
      model_loaded_ = true;
      

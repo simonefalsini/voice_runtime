@@ -22,6 +22,27 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# ONNX Runtime DLL copy helper (Windows only)
+# ---------------------------------------------------------------------------
+function(copy_onnxruntime_dlls target_name)
+    if(WIN32 AND TARGET Kokoro::onnxruntime)
+        set(ONNX_DLL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libraries/onnx/windows")
+        set(DLL_NAMES onnxruntime.dll onnxruntime_providers_shared.dll onnxruntime_providers_cuda.dll onnxruntime_providers_tensorrt.dll)
+        
+        foreach(dll_name IN LISTS DLL_NAMES)
+            if(EXISTS "${ONNX_DLL_DIR}/Release/lib/${dll_name}")
+                add_custom_command(TARGET ${target_name} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${ONNX_DLL_DIR}/$<IF:$<CONFIG:Debug>,Debug,Release>/lib/${dll_name}"
+                        "$<TARGET_FILE_DIR:${target_name}>"
+                    COMMENT "Copying ${dll_name} to $<TARGET_FILE_DIR:${target_name}>"
+                )
+            endif()
+        endforeach()
+    endif()
+endfunction()
+
+# ---------------------------------------------------------------------------
 # Module path — use the project's Find*.cmake modules
 # ---------------------------------------------------------------------------
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/libraries/cmake")
@@ -234,6 +255,7 @@ if(VOICE_RUNTIME_BUILD_TESTS)
     )
     if(TARGET Kokoro::Kokoro)
         target_link_libraries(test_tts_node PRIVATE Kokoro::Kokoro)
+        copy_onnxruntime_dlls(test_tts_node)
     endif()
     if(TARGET EspeakNg::EspeakNg)
         target_link_libraries(test_tts_node PRIVATE EspeakNg::EspeakNg)
@@ -328,6 +350,7 @@ endif()
 
 if(TARGET Kokoro::Kokoro)
     target_link_libraries(voice_runtime_real_pipeline PRIVATE Kokoro::Kokoro)
+    copy_onnxruntime_dlls(voice_runtime_real_pipeline)
 endif()
 
 if(TARGET EspeakNg::EspeakNg)
@@ -394,6 +417,7 @@ endif()
 
 if(TARGET Kokoro::Kokoro)
     target_link_libraries(test_aec_transcription PRIVATE Kokoro::Kokoro)
+    copy_onnxruntime_dlls(test_aec_transcription)
 endif()
 
 if(TARGET EspeakNg::EspeakNg)

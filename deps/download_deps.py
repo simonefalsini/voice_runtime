@@ -25,20 +25,20 @@ def download_gerrit_file(url, output_path):
         raise
 
 def download_and_extract_onnx(deps_dir, dist_dir):
-    print("--- Downloading and Installing ONNX Runtime 1.24.1 ---")
+    print("--- Downloading and Installing ONNX Runtime 1.24.1 (with GPU support) ---")
     onnx_root = os.path.join(dist_dir, "onnx") # libraries/onnx/
     
-    # Check if already installed
+    # Check if already installed (using GPU checks on Windows/Linux)
     check_file = None
     if sys.platform.startswith('win'):
-        check_file = os.path.join(onnx_root, "windows", "Release", "lib", "onnxruntime.lib")
+        check_file = os.path.join(onnx_root, "windows", "Release", "lib", "onnxruntime_providers_cuda.lib")
     elif sys.platform.startswith('darwin'):
         check_file = os.path.join(onnx_root, "osx", "Release", "lib", "libonnxruntime.dylib")
     else:
-        check_file = os.path.join(onnx_root, "linux", "Release", "lib", "libonnxruntime.so")
+        check_file = os.path.join(onnx_root, "linux", "Release", "lib", "libonnxruntime_providers_cuda.so")
         
     if check_file and os.path.exists(check_file):
-        print("ONNX Runtime 1.24.1 is already installed.")
+        print("ONNX Runtime 1.24.1 (with GPU support) is already installed.")
         return
 
     tmp_dir = os.path.join(deps_dir, "build_onnx_tmp")
@@ -46,22 +46,28 @@ def download_and_extract_onnx(deps_dir, dist_dir):
         shutil_rmtree_safe(tmp_dir)
     os.makedirs(tmp_dir, exist_ok=True)
     
-    nupkg_url = "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/1.24.1"
-    nupkg_path = os.path.join(tmp_dir, "onnxruntime.zip")
-    
-    print(f"Downloading ONNX Runtime NuGet from {nupkg_url}...")
-    try:
-        urllib.request.urlretrieve(nupkg_url, nupkg_path)
-    except Exception as e:
-        print(f"Failed to download ONNX Runtime from NuGet: {e}")
-        return
-        
-    print("Extracting NuGet package...")
-    with zipfile.ZipFile(nupkg_path, 'r') as zip_ref:
-        zip_ref.extractall(tmp_dir)
-        
-    def copy_headers_to(dest_inc):
-        src_headers = os.path.join(tmp_dir, "build", "native", "include")
+    # Helper to download and unzip a package into a subdirectory in tmp_dir
+    def download_nupkg(name, url):
+        nupkg_path = os.path.join(tmp_dir, f"{name}.zip")
+        print(f"Downloading {name} NuGet from {url}...")
+        try:
+            urllib.request.urlretrieve(url, nupkg_path)
+            extract_path = os.path.join(tmp_dir, name)
+            os.makedirs(extract_path, exist_ok=True)
+            with zipfile.ZipFile(nupkg_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_path)
+            return extract_path
+        except Exception as e:
+            print(f"Failed to download/extract {name}: {e}")
+            return None
+
+    # Download required packages
+    win_pkg_dir = download_nupkg("onnx_gpu_win", "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime.Gpu.Windows/1.24.1")
+    linux_pkg_dir = download_nupkg("onnx_gpu_linux", "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime.Gpu.Linux/1.24.1")
+    cpu_pkg_dir = download_nupkg("onnx_cpu", "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/1.24.1")
+
+    # Header copy helper
+    def copy_headers_to(src_headers, dest_inc):
         if os.path.exists(src_headers):
             os.makedirs(dest_inc, exist_ok=True)
             for root, dirs, files in os.walk(src_headers):
@@ -74,81 +80,87 @@ def download_and_extract_onnx(deps_dir, dist_dir):
                     shutil.copy2(src_file, dest_file)
 
     import shutil
-    # 1. Windows x64
-    win_src = os.path.join(tmp_dir, "runtimes", "win-x64", "native")
-    if os.path.exists(win_src):
-        for config in ["Release", "Debug"]:
-            platform_dir = os.path.join(onnx_root, "windows", config)
-            copy_headers_to(os.path.join(platform_dir, "include"))
-            dest_lib = os.path.join(platform_dir, "lib")
-            os.makedirs(dest_lib, exist_ok=True)
-            for file in os.listdir(win_src):
-                if file.endswith('.lib') or file.endswith('.dll') or file.endswith('.pdb'):
-                    shutil.copy2(os.path.join(win_src, file), os.path.join(dest_lib, file))
-                    
-    # 2. Linux x64
-    linux_src = os.path.join(tmp_dir, "runtimes", "linux-x64", "native")
-    if os.path.exists(linux_src):
-        for config in ["Release", "Debug"]:
-            platform_dir = os.path.join(onnx_root, "linux", config)
-            copy_headers_to(os.path.join(platform_dir, "include"))
-            dest_lib = os.path.join(platform_dir, "lib")
-            os.makedirs(dest_lib, exist_ok=True)
-            for file in os.listdir(linux_src):
-                if file.endswith('.so'):
-                    shutil.copy2(os.path.join(linux_src, file), os.path.join(dest_lib, file))
-                    
-    # 3. macOS (OSX)
-    osx_src = os.path.join(tmp_dir, "runtimes", "osx", "native")
-    if not os.path.exists(osx_src):
-        osx_src = os.path.join(tmp_dir, "runtimes", "osx-arm64", "native")
-    if os.path.exists(osx_src):
-        for config in ["Release", "Debug"]:
-            platform_dir = os.path.join(onnx_root, "osx", config)
-            copy_headers_to(os.path.join(platform_dir, "include"))
-            dest_lib = os.path.join(platform_dir, "lib")
-            os.makedirs(dest_lib, exist_ok=True)
-            for file in os.listdir(osx_src):
-                if file.endswith('.dylib'):
-                    shutil.copy2(os.path.join(osx_src, file), os.path.join(dest_lib, file))
-                    
-    # 4. iOS
-    ios_zip_path = os.path.join(tmp_dir, "runtimes", "ios", "native", "onnxruntime.xcframework.zip")
-    if os.path.exists(ios_zip_path):
-        ios_extract_dir = os.path.join(tmp_dir, "runtimes", "ios", "native", "extracted")
-        with zipfile.ZipFile(ios_zip_path, 'r') as zip_ref:
-            zip_ref.extractall(ios_extract_dir)
-        for config in ["Release", "Debug"]:
-            platform_dir = os.path.join(onnx_root, "ios", config)
-            copy_headers_to(os.path.join(platform_dir, "include"))
-            dest_lib = os.path.join(platform_dir, "lib")
-            os.makedirs(dest_lib, exist_ok=True)
-            shutil.copytree(os.path.join(ios_extract_dir, "onnxruntime.xcframework"), 
-                            os.path.join(dest_lib, "onnxruntime.xcframework"), dirs_exist_ok=True)
-                            
-    # 5. Android
-    aar_path = os.path.join(tmp_dir, "runtimes", "android", "native", "onnxruntime.aar")
-    if os.path.exists(aar_path):
-        android_extract_dir = os.path.join(tmp_dir, "runtimes", "android", "native", "extracted")
-        with zipfile.ZipFile(aar_path, 'r') as zip_ref:
-            zip_ref.extractall(android_extract_dir)
-        jni_dir = os.path.join(android_extract_dir, "jni")
-        if os.path.exists(jni_dir):
-            for abi in os.listdir(jni_dir):
-                abi_src = os.path.join(jni_dir, abi)
-                if os.path.isdir(abi_src):
-                    for config in ["Release", "Debug"]:
-                        platform_dir = os.path.join(onnx_root, "android", abi, config)
-                        copy_headers_to(os.path.join(platform_dir, "include"))
-                        dest_lib = os.path.join(platform_dir, "lib")
-                        os.makedirs(dest_lib, exist_ok=True)
-                        for file in os.listdir(abi_src):
-                            if file.endswith('.so'):
-                                shutil.copy2(os.path.join(abi_src, file), os.path.join(dest_lib, file))
-                                
+
+    # 1. Windows x64 (from GPU package)
+    if win_pkg_dir:
+        win_src = os.path.join(win_pkg_dir, "runtimes", "win-x64", "native")
+        if os.path.exists(win_src):
+            for config in ["Release", "Debug"]:
+                platform_dir = os.path.join(onnx_root, "windows", config)
+                copy_headers_to(os.path.join(win_pkg_dir, "buildTransitive", "native", "include"), os.path.join(platform_dir, "include"))
+                dest_lib = os.path.join(platform_dir, "lib")
+                os.makedirs(dest_lib, exist_ok=True)
+                for file in os.listdir(win_src):
+                    if file.endswith('.lib') or file.endswith('.dll') or file.endswith('.pdb'):
+                        shutil.copy2(os.path.join(win_src, file), os.path.join(dest_lib, file))
+
+    # 2. Linux x64 (from GPU package)
+    if linux_pkg_dir:
+        linux_src = os.path.join(linux_pkg_dir, "runtimes", "linux-x64", "native")
+        if os.path.exists(linux_src):
+            for config in ["Release", "Debug"]:
+                platform_dir = os.path.join(onnx_root, "linux", config)
+                copy_headers_to(os.path.join(linux_pkg_dir, "buildTransitive", "native", "include"), os.path.join(platform_dir, "include"))
+                dest_lib = os.path.join(platform_dir, "lib")
+                os.makedirs(dest_lib, exist_ok=True)
+                for file in os.listdir(linux_src):
+                    if file.endswith('.so'):
+                        shutil.copy2(os.path.join(linux_src, file), os.path.join(dest_lib, file))
+
+    # 3. macOS (OSX) (from CPU package)
+    if cpu_pkg_dir:
+        osx_src = os.path.join(cpu_pkg_dir, "runtimes", "osx", "native")
+        if not os.path.exists(osx_src):
+            osx_src = os.path.join(cpu_pkg_dir, "runtimes", "osx-arm64", "native")
+        if os.path.exists(osx_src):
+            for config in ["Release", "Debug"]:
+                platform_dir = os.path.join(onnx_root, "osx", config)
+                copy_headers_to(os.path.join(cpu_pkg_dir, "build", "native", "include"), os.path.join(platform_dir, "include"))
+                dest_lib = os.path.join(platform_dir, "lib")
+                os.makedirs(dest_lib, exist_ok=True)
+                for file in os.listdir(osx_src):
+                    if file.endswith('.dylib'):
+                        shutil.copy2(os.path.join(osx_src, file), os.path.join(dest_lib, file))
+
+    # 4. iOS (from CPU package)
+    if cpu_pkg_dir:
+        ios_zip_path = os.path.join(cpu_pkg_dir, "runtimes", "ios", "native", "onnxruntime.xcframework.zip")
+        if os.path.exists(ios_zip_path):
+            ios_extract_dir = os.path.join(cpu_pkg_dir, "runtimes", "ios", "native", "extracted")
+            with zipfile.ZipFile(ios_zip_path, 'r') as zip_ref:
+                zip_ref.extractall(ios_extract_dir)
+            for config in ["Release", "Debug"]:
+                platform_dir = os.path.join(onnx_root, "ios", config)
+                copy_headers_to(os.path.join(cpu_pkg_dir, "build", "native", "include"), os.path.join(platform_dir, "include"))
+                dest_lib = os.path.join(platform_dir, "lib")
+                os.makedirs(dest_lib, exist_ok=True)
+                shutil.copytree(os.path.join(ios_extract_dir, "onnxruntime.xcframework"), 
+                                os.path.join(dest_lib, "onnxruntime.xcframework"), dirs_exist_ok=True)
+
+    # 5. Android (from CPU package)
+    if cpu_pkg_dir:
+        aar_path = os.path.join(cpu_pkg_dir, "runtimes", "android", "native", "onnxruntime.aar")
+        if os.path.exists(aar_path):
+            android_extract_dir = os.path.join(cpu_pkg_dir, "runtimes", "android", "native", "extracted")
+            with zipfile.ZipFile(aar_path, 'r') as zip_ref:
+                zip_ref.extractall(android_extract_dir)
+            jni_dir = os.path.join(android_extract_dir, "jni")
+            if os.path.exists(jni_dir):
+                for abi in os.listdir(jni_dir):
+                    abi_src = os.path.join(jni_dir, abi)
+                    if os.path.isdir(abi_src):
+                        for config in ["Release", "Debug"]:
+                            platform_dir = os.path.join(onnx_root, "android", abi, config)
+                            copy_headers_to(os.path.join(cpu_pkg_dir, "build", "native", "include"), os.path.join(platform_dir, "include"))
+                            dest_lib = os.path.join(platform_dir, "lib")
+                            os.makedirs(dest_lib, exist_ok=True)
+                            for file in os.listdir(abi_src):
+                                if file.endswith('.so'):
+                                    shutil.copy2(os.path.join(abi_src, file), os.path.join(dest_lib, file))
+                                    
     # Clean up
     shutil_rmtree_safe(tmp_dir)
-    print("ONNX Runtime 1.24.1 installation complete!")
+    print("ONNX Runtime 1.24.1 (with GPU support) installation complete!")
 
 def shutil_rmtree_safe(path):
     import shutil

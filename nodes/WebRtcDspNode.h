@@ -5,10 +5,10 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -170,6 +170,7 @@ protected:
     void runLoop() override {
         if (!initialized_) return;
 
+        try {
         while (running()) {
             AudioFrameHandle mic;
             if (!micIn_ || !micIn_->pop(mic)) break;
@@ -180,6 +181,12 @@ protected:
             if (ttsActive && !wasTtsActive_) {
                 warmupFrameCount_ = 0;
                 warmupComplete_ = false;
+                // Record the moment TTS becomes active so drainRenderQueue() can
+                // measure how long it takes for the first render frame to arrive.
+                renderFormatValidated_ = false;  // reset for next TTS session
+                ttsActiveTimestampNs_ = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count());
             }
             wasTtsActive_ = ttsActive;
 
@@ -249,6 +256,10 @@ protected:
             }
 #endif
         }
+        } catch (const std::runtime_error& e) {
+            std::fprintf(stderr, "[WebRtcDSP] Fatal: %s — node stopped.\n", e.what());
+            // Node exits runLoop; the pipeline will detect the missing output and stop cleanly.
+        }
     }
 
 private:
@@ -272,6 +283,30 @@ private:
         // reference frame per 10 ms microphone frame. Draining a prefilled TTS
         // queue here would advance the APM render timeline ahead of capture.
         if (refIn_ && refIn_->tryPop(ref)) {
+            // Validate format only on the first render frame received.
+            // The format is fixed at startup and never changes after that,
+            // so per-frame validation is unnecessary overhead.
+            if (!renderFormatValidated_) {
+                validateRenderFormat(ref->format);   // throws std::runtime_error on mismatch
+                renderFormatValidated_ = true;
+
+                // Measure and log the delay from TTS activation to first render frame
+                // arriving at the APM. Use this to tune aecRefQueue capacity:
+                //   optimal capacity = ceil(delay_ms / frame_ms) + small_margin
+                if (ttsActiveTimestampNs_ > 0) {
+                    const uint64_t nowNs = static_cast<uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count());
+                    const uint64_t delayMs = (nowNs - ttsActiveTimestampNs_) / 1'000'000ULL;
+                    std::fprintf(stderr,
+                        "[WebRtcDSP] First render frame received %llums after TTS activation"
+                        " — suggested aecRefQueue capacity: %llu frames (at %dms/frame)\n",
+                        static_cast<unsigned long long>(delayMs),
+                        static_cast<unsigned long long>((delayMs + cfg_.format.frameMs - 1)
+                                                        / static_cast<unsigned>(cfg_.format.frameMs)) + 4,
+                        cfg_.format.frameMs);
+                }
+            }
             processRenderFrame(*ref);
             ref.reset();
         }
@@ -280,7 +315,8 @@ private:
     bool processRenderFrame(const AudioFrame& frame) {
 #if VOICE_RUNTIME_ENABLE_WEBRTC_APM
         if (!apm_) return false;
-        validateRenderFormat(frame.format);
+        // Format already validated once in drainRenderQueue() on the first render frame.
+        // No per-frame check needed: format is fixed at startup.
 
         const int samples = frame.format.totalSamplesPerFrame();
         const int16_t* srcI16 = nullptr;
@@ -361,12 +397,18 @@ private:
             return;
         }
 
-        std::fprintf(stderr,
-            "[WebRtcDSP] Fatal render format mismatch: got %d Hz, %d ch, %d ms, %s; expected %d Hz, %d ch, %d ms, Int16\n",
-            f.sampleRate, f.channels, f.frameMs,
-            f.sampleFormat == SampleFormat::Int16 ? "Int16" : "Float32",
-            cfg_.format.sampleRate, cfg_.format.channels, cfg_.format.frameMs);
-        std::abort();
+        // Format mismatch is a configuration error — it will never self-correct at runtime.
+        // Throw so the caller can log and stop the node cleanly instead of aborting the process.
+        throw std::runtime_error(
+            std::string("[WebRtcDSP] render format mismatch: got ")
+            + std::to_string(f.sampleRate) + "Hz/"
+            + std::to_string(f.channels)   + "ch/"
+            + std::to_string(f.frameMs)    + "ms/"
+            + (f.sampleFormat == SampleFormat::Int16 ? "Int16" : "Float32")
+            + " — expected "
+            + std::to_string(cfg_.format.sampleRate) + "Hz/"
+            + std::to_string(cfg_.format.channels)   + "ch/"
+            + std::to_string(cfg_.format.frameMs)    + "ms/Int16");
     }
 
     bool evaluateVad(const AudioFrame& frame) {
@@ -471,6 +513,15 @@ private:
     std::vector<int16_t> renderDestI16_;
     std::vector<int16_t> captureDestI16_;
     std::vector<int16_t> vadScratchI16_;
+
+    // Set to true after the first render frame has been validated.
+    // validateRenderFormat() is called only once: format is fixed at startup.
+    bool renderFormatValidated_ = false;
+
+    // Timestamp (steady_clock ns) recorded when ttsActive first becomes true.
+    // Used to measure the delay from TTS activation to first render frame arriving
+    // at the APM — printed once in drainRenderQueue() to help calibrate aecRefQueue capacity.
+    uint64_t ttsActiveTimestampNs_ = 0;
 
 #if VOICE_RUNTIME_ENABLE_WEBRTC_APM
     webrtc::scoped_refptr<webrtc::AudioProcessing> apm_;

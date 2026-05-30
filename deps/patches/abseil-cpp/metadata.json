@@ -1,7 +1,7 @@
 {
     "repository": "https://github.com/abseil/abseil-cpp.git",
     "commit": "917befffa25379099ebdcedd8540b596cee1ea10",
-    "branch": "master",
-    "timestamp": "2026-05-30T17:30:29.319438",
+    "branch": "HEAD",
+    "timestamp": "2026-05-30T19:48:39.211555",
     "modified_files": []
 }

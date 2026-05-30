@@ -1,7 +1,7 @@
 {
     "repository": "https://github.com/ggml-org/ggml.git",
     "commit": "e705c5fed490514458bdd2eaddc43bd098fcce9b",
-    "branch": "master",
-    "timestamp": "2026-05-30T17:30:30.020793",
+    "branch": "HEAD",
+    "timestamp": "2026-05-30T19:48:40.713028",
     "modified_files": []
 }

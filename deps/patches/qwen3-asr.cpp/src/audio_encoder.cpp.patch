@@ -1,8 +1,53 @@
 diff --git a/src/audio_encoder.cpp b/src/audio_encoder.cpp
-index 682e9fb..a9b3928 100644
+index 682e9fb..1603bb4 100644
 --- a/src/audio_encoder.cpp
 +++ b/src/audio_encoder.cpp
-@@ -397,10 +397,24 @@ bool AudioEncoder::encode(const float * mel_data, int n_mel, int n_frames,
+@@ -40,19 +40,25 @@ AudioEncoder::~AudioEncoder() {
+ }
+ 
+ bool AudioEncoder::load_model(const std::string & model_path) {
++    std::printf("[Debug] AudioEncoder::load_model: starting GGUFLoader::load...\n"); std::fflush(stdout);
+     GGUFLoader loader;
+     if (!loader.load(model_path, model_)) {
+         error_msg_ = loader.get_error();
++        std::printf("[Debug] AudioEncoder::load_model: GGUFLoader::load failed\n"); std::fflush(stdout);
+         return false;
+     }
+     
++    std::printf("[Debug] AudioEncoder::load_model: initializing CPU backend...\n"); std::fflush(stdout);
+     state_.backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+     if (!state_.backend_cpu) {
+         error_msg_ = "Failed to initialize CPU backend";
++        std::printf("[Debug] AudioEncoder::load_model: CPU backend init failed\n"); std::fflush(stdout);
+         return false;
+     }
+ 
++    std::printf("[Debug] AudioEncoder::load_model: initializing GPU backend...\n"); std::fflush(stdout);
+     state_.backend_gpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
++    std::printf("[Debug] AudioEncoder::load_model: GPU backend init returned %p\n", (void*)state_.backend_gpu); std::fflush(stdout);
+ 
+     std::vector<ggml_backend_t> backends;
+     std::vector<ggml_backend_buffer_type_t> backend_bufts;
+@@ -71,14 +77,18 @@ bool AudioEncoder::load_model(const std::string & model_path) {
+     }
+     backend_bufts.push_back(cpu_buft);
+ 
++    std::printf("[Debug] AudioEncoder::load_model: creating backend scheduler...\n"); std::fflush(stdout);
+     state_.sched = ggml_backend_sched_new(backends.data(), backend_bufts.data(), backends.size(), QWEN3_ASR_MAX_NODES, false, true);
+     if (!state_.sched) {
+         error_msg_ = "Failed to create backend scheduler";
++        std::printf("[Debug] AudioEncoder::load_model: scheduler creation failed\n"); std::fflush(stdout);
+         return false;
+     }
+     
++    std::printf("[Debug] AudioEncoder::load_model: resizing compute_meta...\n"); std::fflush(stdout);
+     state_.compute_meta.resize(ggml_tensor_overhead() * QWEN3_ASR_MAX_NODES + ggml_graph_overhead());
+     
++    std::printf("[Debug] AudioEncoder::load_model success\n"); std::fflush(stdout);
+     return true;
+ }
+ 
+@@ -397,10 +407,24 @@ bool AudioEncoder::encode(const float * mel_data, int n_mel, int n_frames,
          std::vector<float> chunk_output(out_ctx * out_state);
          ggml_backend_tensor_get(embd_conv, chunk_output.data(), 0, out_ctx * out_state * sizeof(float));
          
@@ -31,7 +76,7 @@ index 682e9fb..a9b3928 100644
          }
          
          all_conv_outputs.insert(all_conv_outputs.end(), chunk_output.begin(), chunk_output.end());
-@@ -658,10 +672,24 @@ bool AudioEncoder::encode_no_chunk(const float * mel_data, int n_mel, int n_fram
+@@ -658,10 +682,24 @@ bool AudioEncoder::encode_no_chunk(const float * mel_data, int n_mel, int n_fram
      
      ggml_backend_sched_reset(state_.sched);
      

@@ -2,8 +2,9 @@
     "repository": "https://github.com/espeak-ng/espeak-ng.git",
     "commit": "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30",
     "branch": "master",
-    "timestamp": "2026-05-30T17:33:23.119178",
+    "timestamp": "2026-05-30T19:55:40.379262",
     "modified_files": [
-        "src/CMakeLists.txt"
+        "src/CMakeLists.txt",
+        "src/include/espeak-ng/speak_lib.h"
     ]
 }
