@@ -98,7 +98,7 @@ _DEPS: Dict[str, List[Tuple[str, str, Optional[str], Optional[int]]]] = {
 }
 
 # Pseudo-targets that don't have downloads but create directories / print info.
-_PSEUDO_TARGETS = {"voices", "espeak-data"}
+_PSEUDO_TARGETS = {"voices", "espeak-data", "tts-dict"}
 
 # All real download targets (models + deps).
 _ALL_REAL_TARGETS = list(_MODELS.keys()) + list(_DEPS.keys())
@@ -347,6 +347,26 @@ def _handle_espeak_data(output_dir: Path) -> None:
             print("  ✗ Could not find espeak-ng data source under deps/espeak-ng/.")
 
 
+def _handle_tts_dict(output_dir: Path) -> None:
+    print(f"\n{'=' * 60}")
+    print(f"  Target: tts-dict")
+    print(f"{'=' * 60}")
+    tts_dict_dir = output_dir / "tts" / "dict"
+    tts_dict_dir.mkdir(parents=True, exist_ok=True)
+    
+    deps_dir = _project_root() / "deps"
+    src_dict = deps_dir / "kokoro.cpp" / "dict"
+    
+    if src_dict.is_dir():
+        print(f"  Found Kokoro dictionary files at: {src_dict}")
+        print(f"  Copying to: {tts_dict_dir} …")
+        import shutil
+        shutil.copytree(str(src_dict), str(tts_dict_dir), dirs_exist_ok=True)
+        print("  ✓ Kokoro dictionary populated successfully!")
+    else:
+        print("  ✗ Could not find Kokoro dictionary source under deps/kokoro.cpp/dict/.")
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -422,7 +442,7 @@ def main() -> int:
     print()
 
     # Ensure base directories exist.
-    for subdir in ("stt", "tts", "vad", "espeak-ng-data"):
+    for subdir in ("stt", "tts", "vad", "espeak-ng-data", "tts/dict"):
         (output_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     # Process download targets.
@@ -440,6 +460,8 @@ def main() -> int:
         _handle_voices(output_dir)
     if "espeak-data" in targets:
         _handle_espeak_data(output_dir)
+    if "tts-dict" in targets:
+        _handle_tts_dict(output_dir)
 
     print(f"\n{'=' * 60}")
     if ok:
