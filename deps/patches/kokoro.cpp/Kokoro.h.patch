@@ -9,3 +9,5 @@ index 0887c65..4d7d945 100644
 -    Kokoro(const std::string& model_path, const std::string& voices_path, const std::string& vocab_path = "dict/vocab.txt");
 +    Kokoro(const std::string& model_path, const std::string& voices_path, const std::string& dict_dir, const std::string& vocab_path);
      ~Kokoro();
+ 
+     

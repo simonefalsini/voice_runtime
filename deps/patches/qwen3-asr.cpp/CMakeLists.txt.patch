@@ -118,3 +118,4 @@ index caa85be..1400dde 100644
 +    ${GGML_LIBS}
      Threads::Threads
  )
+ 

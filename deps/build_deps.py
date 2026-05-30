@@ -1468,6 +1468,211 @@ endif()
         f.write(find_json)
     print(f"CMake Find modules generated in {cmake_dir}")
 
+def generate_webrtc_sources(deps_dir):
+    import glob
+    webrtc_dir = os.path.join(deps_dir, "WebRTC")
+    if not os.path.exists(webrtc_dir):
+        print("Warning: WebRTC directory not found. Cannot scan for sources.")
+        return ""
+        
+    def clean_p(p):
+        return os.path.relpath(p, deps_dir).replace('\\', '/')
+        
+    def glob_sources(sub_dir, recursive=True):
+        files = []
+        path = os.path.join(webrtc_dir, sub_dir)
+        if not os.path.exists(path):
+            return files
+            
+        pattern = "**/*" if recursive else "*"
+        for ext in ['*.cc', '*.c', '*.cpp']:
+            search_pattern = os.path.join(path, pattern + ext)
+            for p in glob.glob(search_pattern, recursive=recursive):
+                normalized = p.replace('\\', '/').lower()
+                
+                # File name exclusions
+                fname = os.path.basename(normalized)
+                
+                # Exclude tests and unittests
+                if any(fname.endswith(x) for x in ['test.cc', 'tests.cc', '_test.cc', '_unittest.cc', 'unittest.cc', 'test.c']):
+                    continue
+                    
+                # Exclude SIMD
+                if any(fname.endswith(x) for x in ['_sse.cc', '_sse2.cc', '_avx2.cc', '_neon.cc', '_neon.c']):
+                    continue
+                    
+                # Exclude MIPS
+                if '_mips' in normalized:
+                    continue
+                    
+                # Directory exclusions
+                if any(x in normalized for x in ['/test/', '/tests/', '/mock/', '/benchmark/', '_unittest.', '_test_', '/mocks/', '/testing/']):
+                    continue
+                    
+                # Custom blacklist
+                blacklist = [
+                    'allocation_counter.cc',
+                    'create_audio_device_module.cc',
+                    'neural_residual_echo_estimator_creator.cc',
+                    'rnn_vad_tool.cc'
+                ]
+                if fname in blacklist:
+                    continue
+                    
+                # Skip non-stdlib task queue factories
+                if 'default_task_queue_factory' in normalized and not normalized.endswith('default_task_queue_factory_stdlib.cc'):
+                    continue
+                    
+                files.append(clean_p(p))
+        return sorted(list(set(files)))
+
+    common_audio = glob_sources("common_audio")
+    system_wrappers = glob_sources("system_wrappers/source")
+    api_audio = glob_sources("api/audio") + glob_sources("api/rtc_event_log", recursive=False)
+    api_units = glob_sources("api/units")
+    api_env = glob_sources("api/environment")
+    if os.path.exists(os.path.join(webrtc_dir, "api/field_trials_registry.cc")):
+        api_env.append(clean_p(os.path.join(webrtc_dir, "api/field_trials_registry.cc")))
+    api_tq = glob_sources("api/task_queue")
+    api_tq = [f for f in api_tq if not any(x in f for x in ['gcd.cc', 'win.cc'])]
+    
+    rtc_base_whitelist = [
+        "rtc_base/checks.cc",
+        "rtc_base/memory/aligned_malloc.cc",
+        "rtc_base/race_checker.cc",
+        "rtc_base/ref_counter.cc",
+        "rtc_base/event.cc",
+        "rtc_base/logging.cc",
+        "rtc_base/time_utils.cc",
+        "rtc_base/platform_thread.cc",
+        "rtc_base/platform_thread_types.cc",
+        "rtc_base/string_to_number.cc",
+        "rtc_base/string_encode.cc",
+        "rtc_base/string_utils.cc",
+        "rtc_base/random.cc",
+        "rtc_base/cpu_info.cc",
+        "rtc_base/event_tracer.cc",
+        "rtc_base/denormal_disabler.cc",
+        "rtc_base/task_queue_stdlib.cc",
+        "api/task_queue/default_task_queue_factory_stdlib.cc",
+        "api/field_trials.cc",
+        "rtc_base/experiments/field_trial_parser.cc",
+        "rtc_base/system/file_wrapper.cc",
+        "rtc_base/system/system_time.cc",
+        "rtc_base/system_time.cc",
+        "rtc_base/strings/string_builder.cc",
+        "rtc_base/strings/string_format.cc",
+        "rtc_base/synchronization/sequence_checker_internal.cc",
+        "rtc_base/synchronization/yield.cc",
+        "rtc_base/synchronization/yield_policy.cc"
+    ]
+    rtc_base = []
+    for f in rtc_base_whitelist:
+        rel_f = "WebRTC/" + f
+        if os.path.exists(os.path.join(deps_dir, rel_f)):
+            rtc_base.append(rel_f)
+            
+    audio_processing = (
+        glob_sources("modules/audio_processing", recursive=False) +
+        glob_sources("modules/audio_processing/logging", recursive=False) +
+        glob_sources("modules/audio_processing/include", recursive=False) +
+        [clean_p(os.path.join(webrtc_dir, "modules/audio_processing/aec_dump/null_aec_dump_factory.cc"))] +
+        glob_sources("modules/audio_processing/utility", recursive=False) +
+        glob_sources("modules/audio_processing/capture_levels_adjuster", recursive=False) +
+        glob_sources("modules/audio_processing/capture_mixer", recursive=False) +
+        glob_sources("modules/audio_processing/agc", recursive=False) +
+        glob_sources("modules/audio_processing/agc/legacy", recursive=False)
+    )
+    audio_processing = [f for f in audio_processing if os.path.exists(os.path.join(deps_dir, f))]
+    
+    aec3 = glob_sources("modules/audio_processing/aec3", recursive=False)
+    agc2 = (
+        glob_sources("modules/audio_processing/agc2", recursive=False) +
+        glob_sources("modules/audio_processing/agc2/rnn_vad", recursive=False)
+    )
+    agc2 = [f for f in agc2 if not any(x in f for x in ['test', 'tool'])]
+    
+    ns = glob_sources("modules/audio_processing/ns", recursive=False)
+    vad = (
+        glob_sources("modules/audio_processing/vad", recursive=False) +
+        glob_sources("modules/audio_coding/codecs/isac/main/source", recursive=False)
+    )
+    third_party = (
+        glob_sources("third_party/rnnoise/src", recursive=False) +
+        glob_sources("third_party/pffft/src", recursive=False)
+    )
+
+    
+    def fmt(var_name, files):
+        lines = [f"set({var_name}"]
+        for f in sorted(list(set(files))):
+            lines.append(f"    {f}")
+        lines.append(")")
+        return "\n".join(lines)
+        
+    cmake_parts = [
+        fmt("COMMON_AUDIO_SOURCES", common_audio),
+        fmt("SYSTEM_WRAPPERS_SOURCES", system_wrappers),
+        fmt("API_AUDIO_SOURCES", api_audio),
+        fmt("API_UNITS_SOURCES", api_units),
+        fmt("API_ENV_SOURCES", api_env),
+        fmt("API_TQ_SOURCES", api_tq),
+        fmt("RTC_BASE_SOURCES", rtc_base),
+        fmt("AUDIO_PROCESSING_SOURCES", audio_processing),
+        fmt("AEC3_SOURCES", aec3),
+        fmt("AGC2_SOURCES", agc2),
+        fmt("NS_SOURCES", ns),
+        fmt("VAD_SOURCES", vad),
+        fmt("THIRD_PARTY_SOURCES", third_party)
+    ]
+    
+    return "\n\n".join(cmake_parts)
+
+def ensure_registered_field_trials_header(deps_dir):
+    webrtc_dir = os.path.join(deps_dir, "WebRTC")
+    header_path = os.path.join(webrtc_dir, "experiments", "registered_field_trials.h")
+    if os.path.exists(webrtc_dir) and not os.path.exists(header_path):
+        print("experiments/registered_field_trials.h not found. Re-generating it...")
+        try:
+            run_cmd([sys.executable, os.path.join("experiments", "field_trials.py"), "header", "--output", os.path.join("experiments", "registered_field_trials.h")], cwd=webrtc_dir)
+            print("Successfully generated experiments/registered_field_trials.h")
+        except Exception as e:
+            print(f"Warning: Failed to generate registered_field_trials.h: {e}")
+
+def update_cmakelists_sources(deps_dir):
+    print("--- Automatically Scanning and Updating WebRTC Sources in CMakeLists.txt ---")
+    cmakelists_path = os.path.join(deps_dir, "CMakeLists.txt")
+    if not os.path.exists(cmakelists_path):
+        print(f"Error: {cmakelists_path} not found.")
+        return
+        
+    generated = generate_webrtc_sources(deps_dir)
+    if not generated:
+        return
+        
+    with open(cmakelists_path, "r", encoding="utf-8") as f:
+        content = f.read()
+        
+    start_tag = "# <<< WEBRTC_AUTO_GENERATED_SOURCES_START >>>"
+    end_tag = "# <<< WEBRTC_AUTO_GENERATED_SOURCES_END >>>"
+    
+    start_idx = content.find(start_tag)
+    end_idx = content.find(end_tag)
+    
+    if start_idx == -1 or end_idx == -1 or start_idx >= end_idx:
+        print("Error: Could not find auto-generation placeholders in CMakeLists.txt.")
+        return
+        
+    new_content = (
+        content[:start_idx + len(start_tag)] + 
+        "\n" + generated + "\n" + 
+        content[end_idx:]
+    )
+    
+    with open(cmakelists_path, "w", encoding="utf-8") as f:
+        f.write(new_content)
+    print("CMakeLists.txt source file list updated successfully.")
+
 def main():
     parser = argparse.ArgumentParser(description="Build WebRTC APM Static Library")
     parser.add_argument("--platform", choices=["windows", "linux", "osx", "ios", "android", "current", "all"], default="current",
@@ -1478,7 +1683,15 @@ def main():
     
     deps_dir = os.path.dirname(os.path.abspath(__file__))
     dist_dir = os.path.join(os.path.dirname(deps_dir), "libraries")
+    
+    # Ensure experiments/registered_field_trials.h is present
+    ensure_registered_field_trials_header(deps_dir)
+    
+    # Automatically scan and update sources in CMakeLists.txt at startup
+    update_cmakelists_sources(deps_dir)
+    
     os.makedirs(dist_dir, exist_ok=True)
+
     
     host = detect_host_platform()
     target = args.platform
@@ -1544,6 +1757,14 @@ def main():
     
     # Generate CMake import configurations
     generate_cmake_imports(dist_dir)
+    
+    # Automatically update commit hashes / patches at the end of a successful build
+    print("\n--- Updating Dependency Metadata and Patches ---")
+    try:
+        run_cmd([sys.executable, os.path.join(deps_dir, "generate_patches.py")])
+    except Exception as e:
+        print(f"Warning: Failed to auto-update patches/metadata: {e}")
+        
     print("\nAll dependencies built and packaging complete!")
 
 if __name__ == "__main__":

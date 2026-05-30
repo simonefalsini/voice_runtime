@@ -332,6 +332,15 @@ def main():
     for filename, url in pffft_files:
         download_gerrit_file(url, os.path.join(pffft_src_dir, filename))
 
+    # 2.5 Generate experiments/registered_field_trials.h for WebRTC
+    if os.path.exists(webrtc_dir):
+        print("Generating experiments/registered_field_trials.h...")
+        try:
+            import sys
+            run_cmd([sys.executable, os.path.join("experiments", "field_trials.py"), "header", "--output", os.path.join("experiments", "registered_field_trials.h")], cwd=webrtc_dir)
+        except Exception as e:
+            print(f"Warning: Failed to generate registered_field_trials.h: {e}")
+
     # 3. Download ONNX Runtime
     download_and_extract_onnx(deps_dir, dist_dir)
 
