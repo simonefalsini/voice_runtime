@@ -13,31 +13,33 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/abseil-cpp")
     add_subdirectory(abseil-cpp)
 endif()
 
-# Source file lists
+# <<< WEBRTC_AUTO_GENERATED_SOURCES_START >>>
 set(COMMON_AUDIO_SOURCES
     WebRTC/common_audio/audio_converter.cc
     WebRTC/common_audio/audio_util.cc
     WebRTC/common_audio/channel_buffer.cc
+    WebRTC/common_audio/fir_filter_c.cc
+    WebRTC/common_audio/fir_filter_factory.cc
     WebRTC/common_audio/real_fourier.cc
     WebRTC/common_audio/real_fourier_ooura.cc
     WebRTC/common_audio/resampler/push_resampler.cc
     WebRTC/common_audio/resampler/push_sinc_resampler.cc
     WebRTC/common_audio/resampler/resampler.cc
     WebRTC/common_audio/resampler/sinc_resampler.cc
-    WebRTC/common_audio/smoothing_filter.cc
-    WebRTC/common_audio/vad/vad.cc
-    WebRTC/common_audio/wav_file.cc
-    WebRTC/common_audio/wav_header.cc
-    WebRTC/common_audio/window_generator.cc
+    WebRTC/common_audio/resampler/sinusoidal_linear_chirp_source.cc
     WebRTC/common_audio/ring_buffer.c
     WebRTC/common_audio/signal_processing/auto_corr_to_refl_coef.c
     WebRTC/common_audio/signal_processing/auto_correlation.c
+    WebRTC/common_audio/signal_processing/complex_bit_reverse.c
+    WebRTC/common_audio/signal_processing/complex_fft.c
     WebRTC/common_audio/signal_processing/copy_set_operations.c
     WebRTC/common_audio/signal_processing/cross_correlation.c
     WebRTC/common_audio/signal_processing/division_operations.c
+    WebRTC/common_audio/signal_processing/dot_product_with_scale.cc
     WebRTC/common_audio/signal_processing/downsample_fast.c
     WebRTC/common_audio/signal_processing/energy.c
     WebRTC/common_audio/signal_processing/filter_ar.c
+    WebRTC/common_audio/signal_processing/filter_ar_fast_q12.c
     WebRTC/common_audio/signal_processing/filter_ma_fast_q12.c
     WebRTC/common_audio/signal_processing/get_hanning_window.c
     WebRTC/common_audio/signal_processing/get_scaling_square.c
@@ -58,25 +60,24 @@ set(COMMON_AUDIO_SOURCES
     WebRTC/common_audio/signal_processing/sqrt_of_one_minus_x_squared.c
     WebRTC/common_audio/signal_processing/vector_operations.c
     WebRTC/common_audio/signal_processing/vector_scaling_operations.c
+    WebRTC/common_audio/smoothing_filter.cc
+    WebRTC/common_audio/third_party/ooura/fft_size_128/ooura_fft.cc
+    WebRTC/common_audio/third_party/ooura/fft_size_256/fft4g.cc
+    WebRTC/common_audio/third_party/spl_sqrt_floor/spl_sqrt_floor.c
+    WebRTC/common_audio/vad/vad.cc
     WebRTC/common_audio/vad/vad_core.c
     WebRTC/common_audio/vad/vad_filterbank.c
     WebRTC/common_audio/vad/vad_gmm.c
     WebRTC/common_audio/vad/vad_sp.c
     WebRTC/common_audio/vad/webrtc_vad.c
-    WebRTC/common_audio/signal_processing/complex_fft.c
-    WebRTC/common_audio/signal_processing/complex_bit_reverse.c
-    WebRTC/common_audio/signal_processing/filter_ar_fast_q12.c
-    WebRTC/common_audio/signal_processing/dot_product_with_scale.cc
-    WebRTC/common_audio/fir_filter_c.cc
-    WebRTC/common_audio/fir_filter_factory.cc
-    WebRTC/common_audio/third_party/ooura/fft_size_256/fft4g.cc
-    WebRTC/common_audio/third_party/ooura/fft_size_128/ooura_fft.cc
-    WebRTC/common_audio/third_party/spl_sqrt_floor/spl_sqrt_floor.c
+    WebRTC/common_audio/wav_file.cc
+    WebRTC/common_audio/wav_header.cc
+    WebRTC/common_audio/window_generator.cc
 )
 
 set(SYSTEM_WRAPPERS_SOURCES
-    WebRTC/system_wrappers/source/metrics.cc
     WebRTC/system_wrappers/source/clock.cc
+    WebRTC/system_wrappers/source/metrics.cc
 )
 
 set(API_AUDIO_SOURCES
@@ -89,6 +90,7 @@ set(API_AUDIO_SOURCES
     WebRTC/api/audio/echo_canceller3_factory.cc
     WebRTC/api/audio/echo_detector_creator.cc
     WebRTC/api/rtc_event_log/rtc_event_log.cc
+    WebRTC/api/rtc_event_log/rtc_event_log_factory.cc
 )
 
 set(API_UNITS_SOURCES
@@ -100,69 +102,58 @@ set(API_UNITS_SOURCES
 )
 
 set(API_ENV_SOURCES
-    WebRTC/api/environment/environment_factory.cc
     WebRTC/api/environment/deprecated_global_field_trials.cc
+    WebRTC/api/environment/environment_factory.cc
     WebRTC/api/field_trials_registry.cc
 )
 
 set(API_TQ_SOURCES
-    WebRTC/api/task_queue/task_queue_base.cc
+    WebRTC/api/task_queue/default_task_queue_factory_stdlib.cc
     WebRTC/api/task_queue/pending_task_safety_flag.cc
+    WebRTC/api/task_queue/task_queue_base.cc
 )
 
 set(RTC_BASE_SOURCES
+    WebRTC/api/field_trials.cc
+    WebRTC/api/task_queue/default_task_queue_factory_stdlib.cc
     WebRTC/rtc_base/checks.cc
-    WebRTC/rtc_base/memory/aligned_malloc.cc
-    WebRTC/rtc_base/race_checker.cc
-    WebRTC/rtc_base/ref_counter.cc
+    WebRTC/rtc_base/cpu_info.cc
+    WebRTC/rtc_base/denormal_disabler.cc
     WebRTC/rtc_base/event.cc
+    WebRTC/rtc_base/event_tracer.cc
+    WebRTC/rtc_base/experiments/field_trial_parser.cc
     WebRTC/rtc_base/logging.cc
-    WebRTC/rtc_base/time_utils.cc
+    WebRTC/rtc_base/memory/aligned_malloc.cc
     WebRTC/rtc_base/platform_thread.cc
     WebRTC/rtc_base/platform_thread_types.cc
-    WebRTC/rtc_base/string_to_number.cc
-    WebRTC/rtc_base/string_encode.cc
-    WebRTC/rtc_base/string_utils.cc
+    WebRTC/rtc_base/race_checker.cc
     WebRTC/rtc_base/random.cc
-    WebRTC/rtc_base/cpu_info.cc
-    WebRTC/rtc_base/event_tracer.cc
-    WebRTC/rtc_base/denormal_disabler.cc
-    WebRTC/rtc_base/task_queue_stdlib.cc
-    WebRTC/api/task_queue/default_task_queue_factory_stdlib.cc
-    WebRTC/api/field_trials.cc
-    WebRTC/rtc_base/experiments/field_trial_parser.cc
-    WebRTC/rtc_base/system/file_wrapper.cc
-    WebRTC/rtc_base/system/system_time.cc
-    WebRTC/rtc_base/system_time.cc
+    WebRTC/rtc_base/ref_counter.cc
+    WebRTC/rtc_base/string_encode.cc
+    WebRTC/rtc_base/string_to_number.cc
+    WebRTC/rtc_base/string_utils.cc
     WebRTC/rtc_base/strings/string_builder.cc
     WebRTC/rtc_base/strings/string_format.cc
     WebRTC/rtc_base/synchronization/sequence_checker_internal.cc
     WebRTC/rtc_base/synchronization/yield.cc
     WebRTC/rtc_base/synchronization/yield_policy.cc
+    WebRTC/rtc_base/system/file_wrapper.cc
+    WebRTC/rtc_base/system/system_time.cc
+    WebRTC/rtc_base/system_time.cc
+    WebRTC/rtc_base/task_queue_stdlib.cc
+    WebRTC/rtc_base/time_utils.cc
 )
 
-if(ANDROID)
-    list(APPEND RTC_BASE_SOURCES WebRTC/rtc_base/system/warn_current_thread_is_deadlocked.cc)
-endif()
-
 set(AUDIO_PROCESSING_SOURCES
-    WebRTC/modules/audio_processing/audio_processing_impl.cc
-    WebRTC/modules/audio_processing/audio_buffer.cc
-    WebRTC/modules/audio_processing/splitting_filter.cc
-    WebRTC/modules/audio_processing/three_band_filter_bank.cc
-    WebRTC/modules/audio_processing/high_pass_filter.cc
-    WebRTC/modules/audio_processing/post_filter.cc
-    WebRTC/modules/audio_processing/rms_level.cc
-    WebRTC/modules/audio_processing/gain_control_impl.cc
-    WebRTC/modules/audio_processing/gain_controller2.cc
-    WebRTC/modules/audio_processing/logging/apm_data_dumper.cc
-    WebRTC/modules/audio_processing/include/audio_frame_proxies.cc
-    WebRTC/modules/audio_processing/include/aec_dump.cc
     WebRTC/modules/audio_processing/aec_dump/null_aec_dump_factory.cc
-    WebRTC/modules/audio_processing/utility/cascaded_biquad_filter.cc
-    WebRTC/modules/audio_processing/utility/delay_estimator.cc
-    WebRTC/modules/audio_processing/utility/delay_estimator_wrapper.cc
-    WebRTC/modules/audio_processing/utility/pffft_wrapper.cc
+    WebRTC/modules/audio_processing/agc/agc.cc
+    WebRTC/modules/audio_processing/agc/agc_manager_direct.cc
+    WebRTC/modules/audio_processing/agc/legacy/analog_agc.cc
+    WebRTC/modules/audio_processing/agc/legacy/digital_agc.cc
+    WebRTC/modules/audio_processing/agc/loudness_histogram.cc
+    WebRTC/modules/audio_processing/agc/utility.cc
+    WebRTC/modules/audio_processing/audio_buffer.cc
+    WebRTC/modules/audio_processing/audio_processing_impl.cc
     WebRTC/modules/audio_processing/capture_levels_adjuster/audio_samples_scaler.cc
     WebRTC/modules/audio_processing/capture_levels_adjuster/capture_levels_adjuster.cc
     WebRTC/modules/audio_processing/capture_mixer/audio_content_analyzer.cc
@@ -172,12 +163,19 @@ set(AUDIO_PROCESSING_SOURCES
     WebRTC/modules/audio_processing/capture_mixer/energy_estimator.cc
     WebRTC/modules/audio_processing/capture_mixer/remixing_logic.cc
     WebRTC/modules/audio_processing/capture_mixer/saturation_estimator.cc
-    WebRTC/modules/audio_processing/agc/agc.cc
-    WebRTC/modules/audio_processing/agc/agc_manager_direct.cc
-    WebRTC/modules/audio_processing/agc/loudness_histogram.cc
-    WebRTC/modules/audio_processing/agc/utility.cc
-    WebRTC/modules/audio_processing/agc/legacy/analog_agc.cc
-    WebRTC/modules/audio_processing/agc/legacy/digital_agc.cc
+    WebRTC/modules/audio_processing/gain_control_impl.cc
+    WebRTC/modules/audio_processing/gain_controller2.cc
+    WebRTC/modules/audio_processing/high_pass_filter.cc
+    WebRTC/modules/audio_processing/include/aec_dump.cc
+    WebRTC/modules/audio_processing/include/audio_frame_proxies.cc
+    WebRTC/modules/audio_processing/logging/apm_data_dumper.cc
+    WebRTC/modules/audio_processing/post_filter.cc
+    WebRTC/modules/audio_processing/residual_echo_detector.cc
+    WebRTC/modules/audio_processing/rms_level.cc
+    WebRTC/modules/audio_processing/splitting_filter.cc
+    WebRTC/modules/audio_processing/three_band_filter_bank.cc
+    WebRTC/modules/audio_processing/utility/cascaded_biquad_filter.cc
+    WebRTC/modules/audio_processing/utility/pffft_wrapper.cc
 )
 
 set(AEC3_SOURCES
@@ -255,6 +253,16 @@ set(AGC2_SOURCES
     WebRTC/modules/audio_processing/agc2/limiter.cc
     WebRTC/modules/audio_processing/agc2/limiter_db_gain_curve.cc
     WebRTC/modules/audio_processing/agc2/noise_level_estimator.cc
+    WebRTC/modules/audio_processing/agc2/rnn_vad/auto_correlation.cc
+    WebRTC/modules/audio_processing/agc2/rnn_vad/features_extraction.cc
+    WebRTC/modules/audio_processing/agc2/rnn_vad/lp_residual.cc
+    WebRTC/modules/audio_processing/agc2/rnn_vad/pitch_search.cc
+    WebRTC/modules/audio_processing/agc2/rnn_vad/pitch_search_internal.cc
+    WebRTC/modules/audio_processing/agc2/rnn_vad/rnn.cc
+    WebRTC/modules/audio_processing/agc2/rnn_vad/rnn_fc.cc
+    WebRTC/modules/audio_processing/agc2/rnn_vad/rnn_gru.cc
+    WebRTC/modules/audio_processing/agc2/rnn_vad/spectral_features.cc
+    WebRTC/modules/audio_processing/agc2/rnn_vad/spectral_features_internal.cc
     WebRTC/modules/audio_processing/agc2/saturation_protector.cc
     WebRTC/modules/audio_processing/agc2/saturation_protector_buffer.cc
     WebRTC/modules/audio_processing/agc2/speech_level_estimator.cc
@@ -263,17 +271,6 @@ set(AGC2_SOURCES
     WebRTC/modules/audio_processing/agc2/speech_probability_buffer.cc
     WebRTC/modules/audio_processing/agc2/vad_wrapper.cc
     WebRTC/modules/audio_processing/agc2/vector_float_frame.cc
-    
-    WebRTC/modules/audio_processing/agc2/rnn_vad/features_extraction.cc
-    WebRTC/modules/audio_processing/agc2/rnn_vad/rnn.cc
-    WebRTC/modules/audio_processing/agc2/rnn_vad/auto_correlation.cc
-    WebRTC/modules/audio_processing/agc2/rnn_vad/lp_residual.cc
-    WebRTC/modules/audio_processing/agc2/rnn_vad/rnn_fc.cc
-    WebRTC/modules/audio_processing/agc2/rnn_vad/rnn_gru.cc
-    WebRTC/modules/audio_processing/agc2/rnn_vad/pitch_search.cc
-    WebRTC/modules/audio_processing/agc2/rnn_vad/pitch_search_internal.cc
-    WebRTC/modules/audio_processing/agc2/rnn_vad/spectral_features.cc
-    WebRTC/modules/audio_processing/agc2/rnn_vad/spectral_features_internal.cc
 )
 
 set(NS_SOURCES
@@ -293,6 +290,10 @@ set(NS_SOURCES
 )
 
 set(VAD_SOURCES
+    WebRTC/modules/audio_coding/codecs/isac/main/source/filter_functions.c
+    WebRTC/modules/audio_coding/codecs/isac/main/source/isac_vad.c
+    WebRTC/modules/audio_coding/codecs/isac/main/source/pitch_estimator.c
+    WebRTC/modules/audio_coding/codecs/isac/main/source/pitch_filter.c
     WebRTC/modules/audio_processing/vad/gmm.cc
     WebRTC/modules/audio_processing/vad/pitch_based_vad.cc
     WebRTC/modules/audio_processing/vad/pitch_internal.cc
@@ -301,17 +302,14 @@ set(VAD_SOURCES
     WebRTC/modules/audio_processing/vad/vad_audio_proc.cc
     WebRTC/modules/audio_processing/vad/vad_circular_buffer.cc
     WebRTC/modules/audio_processing/vad/voice_activity_detector.cc
-    WebRTC/modules/audio_coding/codecs/isac/main/source/filter_functions.c
-    WebRTC/modules/audio_coding/codecs/isac/main/source/isac_vad.c
-    WebRTC/modules/audio_coding/codecs/isac/main/source/pitch_estimator.c
-    WebRTC/modules/audio_coding/codecs/isac/main/source/pitch_filter.c
 )
 
 set(THIRD_PARTY_SOURCES
-    WebRTC/third_party/rnnoise/src/rnn_vad_weights.cc
     WebRTC/third_party/pffft/src/fftpack.c
     WebRTC/third_party/pffft/src/pffft.c
+    WebRTC/third_party/rnnoise/src/rnn_vad_weights.cc
 )
+# <<< WEBRTC_AUTO_GENERATED_SOURCES_END >>>
 
 # SIMD sources (AVX2, Neon, SSE2)
 set(ARCH_SOURCES)
