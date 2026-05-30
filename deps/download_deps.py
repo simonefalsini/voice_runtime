@@ -292,36 +292,48 @@ def main():
         if not os.path.exists(dep_path):
             print(f"Cloning {name} from {repo_url}...")
             run_cmd(["git", "clone", repo_url, name], cwd=deps_dir)
+            current_hash = None
+            is_dirty = False
         else:
             print(f"Directory {name} already exists.")
-            
-        # Ensure we checkout the exact commit hash if specified in metadata
-        if commit_hash:
-            current_hash = subprocess.run(["git", "rev-parse", "HEAD"], cwd=dep_path, capture_output=True, text=True).stdout.strip()
-            if current_hash != commit_hash:
-                print(f"Checking out specific commit {commit_hash} for {name}...")
-                # Fetch first in case the commit is not present locally
-                subprocess.run(["git", "fetch", "origin"], cwd=dep_path)
-                run_cmd(["git", "checkout", commit_hash], cwd=dep_path)
-                
-        # Check and apply combined patch if exists
-        patch_file = os.path.join(deps_dir, "patches", name, "combined.patch")
-        if os.path.exists(patch_file):
-            print(f"Checking/Applying patch for {name}...")
             try:
-                res = subprocess.run(["git", "apply", "--ignore-whitespace", "--check", patch_file], cwd=dep_path, capture_output=True)
-                if res.returncode == 0:
-                    print("Applying patch...")
-                    run_cmd(["git", "apply", "--ignore-whitespace", patch_file], cwd=dep_path)
-                else:
-                    # Check if already applied
+                current_hash = subprocess.run(["git", "rev-parse", "HEAD"], cwd=dep_path, capture_output=True, text=True).stdout.strip()
+            except Exception:
+                current_hash = None
+            try:
+                is_dirty = subprocess.run(["git", "status", "--porcelain"], cwd=dep_path, capture_output=True, text=True).stdout.strip() != ""
+            except Exception:
+                is_dirty = False
+            
+        patch_file = os.path.join(deps_dir, "patches", name, "combined.patch")
+        needs_checkout = commit_hash and current_hash != commit_hash
+
+        if needs_checkout:
+            print(f"Aligning {name} to commit {commit_hash}...")
+            if is_dirty:
+                print(f"Saving local changes in {name} to git stash...")
+                subprocess.run(["git", "stash"], cwd=dep_path)
+            subprocess.run(["git", "reset", "--hard"], cwd=dep_path)
+            print(f"Checking out specific commit {commit_hash} for {name}...")
+            subprocess.run(["git", "fetch", "origin"], cwd=dep_path)
+            run_cmd(["git", "checkout", commit_hash], cwd=dep_path)
+            
+            if os.path.exists(patch_file):
+                print(f"Applying patch for {name}...")
+                run_cmd(["git", "apply", "--ignore-whitespace", patch_file], cwd=dep_path)
+        else:
+            if os.path.exists(patch_file):
+                try:
                     res_rev = subprocess.run(["git", "apply", "--ignore-whitespace", "--reverse", "--check", patch_file], cwd=dep_path, capture_output=True)
-                    if res_rev.returncode == 0:
-                        print("Patch is already applied.")
+                    if res_rev.returncode != 0:
+                        print(f"Applying patch for {name}...")
+                        if is_dirty:
+                            subprocess.run(["git", "reset", "--hard"], cwd=dep_path)
+                        run_cmd(["git", "apply", "--ignore-whitespace", patch_file], cwd=dep_path)
                     else:
-                        print(f"Warning: Patch for {name} cannot be applied cleanly and does not seem already applied.")
-            except Exception as e:
-                print(f"Error applying patch for {name}: {e}")
+                        print(f"Dependency {name} is already up-to-date and patched. Skipping.")
+                except Exception as e:
+                    print(f"Error checking/applying patch for {name}: {e}")
 
     # 2. Download WebRTC third party files
     webrtc_dir = os.path.join(deps_dir, "WebRTC")
