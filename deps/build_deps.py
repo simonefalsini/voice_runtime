@@ -192,6 +192,7 @@ def build_dependency_espeak(deps_dir, dist_dir, platform, config, cmake_args, ge
         shutil.rmtree(build_dir, ignore_errors=True)
     os.makedirs(build_dir, exist_ok=True)
     
+    compile_intonations = "ON" if platform in ["windows", "osx", "linux"] else "OFF"
     cmd_configure = [
         "cmake",
         "-S", src_dir,
@@ -199,7 +200,7 @@ def build_dependency_espeak(deps_dir, dist_dir, platform, config, cmake_args, ge
         f"-DCMAKE_BUILD_TYPE={config}",
         "-DBUILD_SHARED_LIBS=OFF",
         "-DENABLE_TESTS=OFF",
-        "-DCOMPILE_INTONATIONS=OFF"
+        f"-DCOMPILE_INTONATIONS={compile_intonations}"
     ]
     if generator:
         cmd_configure += ["-G", generator]

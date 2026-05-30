@@ -181,13 +181,10 @@ def _download_file(
     print(f"    {url}")
 
     try:
-        urllib.request.urlretrieve(url, str(part), reporthook=_progress_hook)
-        # urlretrieve doesn't use the Request object directly for headers,
-        # so for HF-gated models we need the lower-level API.
-        # Re-download with opener if a token is set.
         if hf_token and "huggingface.co" in url:
-            part.unlink(missing_ok=True)
             _download_with_headers(req, part)
+        else:
+            urllib.request.urlretrieve(url, str(part), reporthook=_progress_hook)
     except urllib.error.HTTPError as exc:
         print(f"\n  ✗ HTTP {exc.code}: {exc.reason}")
         if exc.code == 401 and "huggingface.co" in url:
@@ -321,20 +318,33 @@ def _handle_espeak_data(output_dir: Path) -> None:
     print(f"{'=' * 60}")
     espeak_dir = output_dir / "espeak-ng-data"
     espeak_dir.mkdir(parents=True, exist_ok=True)
-    print(
-        f"  Created directory: {espeak_dir}\n"
-        "\n"
-        "  This directory must be populated with espeak-ng data files.\n"
-        "  Typically you copy them from an espeak-ng build:\n"
-        "\n"
-        "    cp -r /path/to/espeak-ng-build/share/espeak-ng-data/* "
-        + str(espeak_dir)
-        + "/\n"
-        "\n"
-        "  Or from a system installation:\n"
-        "    macOS (Homebrew): /opt/homebrew/share/espeak-ng-data/\n"
-        "    Linux:            /usr/share/espeak-ng-data/ or /usr/lib/x86_64-linux-gnu/espeak-ng-data/\n"
-    )
+    
+    # Try to find compiled espeak-ng-data in deps build dirs first
+    deps_dir = _project_root() / "deps"
+    compiled_src: Optional[Path] = None
+    for path in deps_dir.glob("build_espeak_*"):
+        if path.is_dir():
+            candidate = path / "espeak-ng-data"
+            if candidate.is_dir() and (candidate / "phondata").exists():
+                compiled_src = candidate
+                break
+                
+    import shutil
+    if compiled_src:
+        print(f"  Found compiled espeak-ng-data at: {compiled_src}")
+        print(f"  Copying to: {espeak_dir} …")
+        shutil.copytree(str(compiled_src), str(espeak_dir), dirs_exist_ok=True)
+        print("  ✓ espeak-ng-data populated successfully!")
+    else:
+        # Fallback to copy the repository's source espeak-ng-data folder (partial data)
+        src_repo_data = deps_dir / "espeak-ng" / "espeak-ng-data"
+        if src_repo_data.is_dir():
+            print(f"  Compiled espeak-ng-data not found (run build_deps.py first).")
+            print(f"  Copying source repository data (partial) from: {src_repo_data} …")
+            shutil.copytree(str(src_repo_data), str(espeak_dir), dirs_exist_ok=True)
+            print("  ⚠ Copied source repository data folder. Note that compiled phoneme and dict files are missing.")
+        else:
+            print("  ✗ Could not find espeak-ng data source under deps/espeak-ng/.")
 
 
 # ---------------------------------------------------------------------------
