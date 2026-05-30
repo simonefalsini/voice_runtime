@@ -1,20 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 9e322f9..397ff37 100644
+index 9e322f9..9183fd6 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -11,10 +11,7 @@ if (MSVC)
-     add_compile_options("/utf-8")
-     add_compile_options("/EHsc")
-     
--    # 使用静态链接的多线程运行时库
--    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
--    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT")
--    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /MTd")
-+
-     
-     # 禁用弃用警告
-     add_compile_definitions(_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS)
-@@ -33,18 +30,20 @@ if (MSVC)
+@@ -33,18 +33,20 @@ if (MSVC)
  endif()
  
  # ONNX Runtime Configuration
@@ -47,10 +35,18 @@ index 9e322f9..397ff37 100644
  endif()
  
 diff --git a/Kokoro.cpp b/Kokoro.cpp
-index 28ab261..b93928b 100644
+index 28ab261..e8fad2e 100644
 --- a/Kokoro.cpp
 +++ b/Kokoro.cpp
-@@ -14,7 +14,7 @@ std::vector<float> trim_audio(const std::vector<float>& audio, int sample_rate,
+@@ -5,6 +5,7 @@
+ #include <regex>
+ #include <numeric>
+ #include <cstring>
++#include <thread>
+ 
+ // Helper to trim audio (simple amplitude based silence removal)
+ std::vector<float> trim_audio(const std::vector<float>& audio, int sample_rate, float threshold_db = 60.0f) {
+@@ -14,12 +15,15 @@ std::vector<float> trim_audio(const std::vector<float>& audio, int sample_rate,
      return audio; 
  }
  
@@ -59,7 +55,16 @@ index 28ab261..b93928b 100644
      : env_(ORT_LOGGING_LEVEL_WARNING, "Kokoro")
  {
      // Initialize session options
-@@ -63,7 +63,9 @@ Kokoro::Kokoro(const std::string& model_path, const std::string& voices_path, co
+     Ort::SessionOptions session_options;
+-    session_options.SetIntraOpNumThreads(1);
++    unsigned int threads = std::thread::hardware_concurrency();
++    if (threads == 0) threads = 4;
++    threads = std::min(threads, 4u); // Use up to 4 threads for ONNX runtime
++    session_options.SetIntraOpNumThreads(threads);
+     session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+ 
+     // Load model
+@@ -63,7 +67,9 @@ Kokoro::Kokoro(const std::string& model_path, const std::string& voices_path, co
      }
  
      // Initialize Tokenizer
@@ -102,17 +107,3 @@ index 3a8c209..7474146 100644
          
          auto voice = tts.get_voice_style("zf_002"); // Default voice
          auto result = tts.create(text, voice, 1.0f);
-diff --git a/missing_symbols.cpp b/missing_symbols.cpp
-index d353b18..9845eaf 100644
---- a/missing_symbols.cpp
-+++ b/missing_symbols.cpp
-@@ -1,3 +1,4 @@
-+#if !defined(_MSC_VER)
- #include <cstdint>
- #include <cstring>
- 
-@@ -27,3 +28,4 @@ extern "C" {
-         return size;
-     }
- }
-+#endif

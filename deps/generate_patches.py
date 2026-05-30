@@ -42,6 +42,9 @@ def main():
         # Filter out mode-only changes or empty diffs
         actual_changed_files = []
         for file_path in all_changed_files:
+            # Skip local user/IDE/build files
+            if any(x in file_path for x in [".swiftpm/", ".DS_Store", "xcuserdata/", ".git"]):
+                continue
             # Skip specific auto-generated files
             if item == "WebRTC" and file_path == "experiments/registered_field_trials.h":
                 continue
@@ -131,8 +134,10 @@ def main():
                         f.write(diff_res.stdout.replace(b"\r\n", b"\n"))
                         
                 # Create a combined patch file for ease of application
-                combined_res = subprocess.run(["git", "diff", "HEAD", "--ignore-submodules=all"], cwd=item_path, capture_output=True)
+                combined_res = subprocess.run(["git", "diff", "HEAD", "--ignore-submodules=all", "--"] + actual_changed_files, cwd=item_path, capture_output=True)
                 if combined_res.returncode == 0 and combined_res.stdout:
+                    combined_patch_path = os.path.join(combined_patch_path if 'combined_patch_path' in locals() else os.path.join(dep_patch_dir, "combined.patch"), "wb")
+                    # Wait, let's use the explicit target path:
                     combined_patch_path = os.path.join(dep_patch_dir, "combined.patch")
                     with open(combined_patch_path, "wb") as f:
                         f.write(combined_res.stdout.replace(b"\r\n", b"\n"))

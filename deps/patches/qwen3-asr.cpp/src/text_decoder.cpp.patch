@@ -1,5 +1,5 @@
 diff --git a/src/text_decoder.cpp b/src/text_decoder.cpp
-index bbefe7c..a438a38 100644
+index bbefe7c..83c333c 100644
 --- a/src/text_decoder.cpp
 +++ b/src/text_decoder.cpp
 @@ -5,10 +5,17 @@
@@ -117,19 +117,7 @@ index bbefe7c..a438a38 100644
      uint8_t * data_base = (uint8_t *)mmap_addr + data_offset;
      
      const int64_t n_tensors = gguf_get_n_tensors(ctx);
-@@ -304,14 +352,22 @@ bool TextDecoder::load_tensor_data(const std::string & path, struct gguf_context
-     // Try GPU device buffer (zero-copy on Apple Silicon unified memory)
-     ggml_backend_dev_t gpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
-     if (gpu_dev) {
--        model_.buffer = ggml_backend_dev_buffer_from_host_ptr(gpu_dev, data_base, total_size, max_tensor_size);
-+        ggml_backend_dev_props props;
-+        ggml_backend_dev_get_props(gpu_dev, &props);
-+        if (props.caps.buffer_from_host_ptr) {
-+            model_.buffer = ggml_backend_dev_buffer_from_host_ptr(gpu_dev, data_base, total_size, max_tensor_size);
-+        }
-     }
-     if (!model_.buffer) {
-         model_.buffer = ggml_backend_cpu_buffer_from_ptr(data_base, total_size);
+@@ -311,7 +359,11 @@ bool TextDecoder::load_tensor_data(const std::string & path, struct gguf_context
      }
      if (!model_.buffer) {
          error_msg_ = "Failed to create buffer from mmap";
@@ -142,7 +130,7 @@ index bbefe7c..a438a38 100644
          model_.mmap_addr = nullptr;
          model_.mmap_size = 0;
          return false;
-@@ -771,7 +827,11 @@ void free_decoder_model(text_decoder_model & model) {
+@@ -771,7 +823,11 @@ void free_decoder_model(text_decoder_model & model) {
          model.ctx = nullptr;
      }
      if (model.mmap_addr) {

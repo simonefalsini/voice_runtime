@@ -1,8 +1,17 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index caa85be..1400dde 100644
+index caa85be..27a8826 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -22,8 +22,53 @@ endif()
+@@ -18,12 +18,72 @@ if(QWEN3_ASR_TIMING)
+     add_compile_definitions(QWEN3_ASR_TIMING)
+ endif()
+ 
++option(QWEN3_ASR_BUILD_TESTS_AND_CLI "Build tests and CLI executables" ON)
++if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "Android")
++    set(QWEN3_ASR_BUILD_TESTS_AND_CLI OFF)
++endif()
++
+ # Find threads
  find_package(Threads REQUIRED)
  
  # GGML library paths
@@ -25,6 +34,7 @@ index caa85be..1400dde 100644
 +find_library(GGML_CUDA_LIB ggml-cuda HINTS ${GGML_BUILD_DIR}/src/ggml-cuda ${GGML_BUILD_DIR}/src/ggml-cuda/Release ${GGML_BUILD_DIR}/src/ggml-cuda/Debug)
 +find_library(GGML_METAL_LIB ggml-metal HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
 +find_library(GGML_VULKAN_LIB ggml-vulkan HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_BLAS_LIB ggml-blas HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
 +
 +set(GGML_LIBS ${GGML_LIB} ${GGML_BASE_LIB} ${GGML_CPU_LIB})
 +if(GGML_CUDA_LIB)
@@ -53,12 +63,21 @@ index caa85be..1400dde 100644
 +        message(STATUS "Linked Vulkan library: ${VULKAN_LIB}")
 +    endif()
 +endif()
++if(GGML_BLAS_LIB)
++    list(APPEND GGML_LIBS ${GGML_BLAS_LIB})
++    message(STATUS "Found GGML BLAS library: ${GGML_BLAS_LIB}")
++endif()
++
++if(APPLE)
++    list(APPEND GGML_LIBS "-framework Accelerate")
++    message(STATUS "Linked Apple Accelerate framework")
++endif()
 +
 +message(STATUS "GGML libraries: ${GGML_LIBS}")
  
  # Mel spectrogram library
  add_library(mel_spectrogram STATIC
-@@ -52,13 +97,8 @@ target_include_directories(audio_encoder PUBLIC
+@@ -52,13 +112,8 @@ target_include_directories(audio_encoder PUBLIC
      ${CMAKE_CURRENT_SOURCE_DIR}/src
      ${GGML_DIR}/include
  )
@@ -73,7 +92,7 @@ index caa85be..1400dde 100644
      Threads::Threads
  )
  
-@@ -70,13 +110,8 @@ target_include_directories(text_decoder PUBLIC
+@@ -70,13 +125,8 @@ target_include_directories(text_decoder PUBLIC
      ${CMAKE_CURRENT_SOURCE_DIR}/src
      ${GGML_DIR}/include
  )
@@ -88,7 +107,7 @@ index caa85be..1400dde 100644
      Threads::Threads
  )
  
-@@ -112,14 +147,9 @@ target_include_directories(forced_aligner PUBLIC
+@@ -112,17 +162,13 @@ target_include_directories(forced_aligner PUBLIC
      ${CMAKE_CURRENT_SOURCE_DIR}/src
      ${GGML_DIR}/include
  )
@@ -104,7 +123,11 @@ index caa85be..1400dde 100644
      Threads::Threads
  )
  
-@@ -183,13 +213,8 @@ add_executable(test_embedding
++if(QWEN3_ASR_BUILD_TESTS_AND_CLI)
+ # CLI executable
+ add_executable(qwen3-asr-cli
+     src/main.cpp
+@@ -183,13 +229,8 @@ add_executable(test_embedding
  target_include_directories(test_embedding PRIVATE
      ${GGML_DIR}/include
  )
@@ -119,56 +142,98 @@ index caa85be..1400dde 100644
      Threads::Threads
  )
  
+@@ -273,43 +314,53 @@ target_link_libraries(test_encoder_no_chunk PRIVATE
+     audio_encoder
+     Threads::Threads
+ )
++endif()
+ 
+ # Install targets
+-install(TARGETS mel_spectrogram audio_encoder text_decoder audio_injection qwen3_asr forced_aligner qwen3-asr-cli
+-    ARCHIVE DESTINATION lib
+-    RUNTIME DESTINATION bin
+-)
++if(QWEN3_ASR_BUILD_TESTS_AND_CLI)
++    install(TARGETS mel_spectrogram audio_encoder text_decoder audio_injection qwen3_asr forced_aligner qwen3-asr-cli
++        ARCHIVE DESTINATION lib
++        RUNTIME DESTINATION bin
++        BUNDLE DESTINATION bin
++    )
++else()
++    install(TARGETS mel_spectrogram audio_encoder text_decoder audio_injection qwen3_asr forced_aligner
++        ARCHIVE DESTINATION lib
++    )
++endif()
+ install(FILES src/mel_spectrogram.h src/audio_encoder.h src/gguf_loader.h src/text_decoder.h src/audio_injection.h src/qwen3_asr.h src/forced_aligner.h
+     DESTINATION include
+ )
+ 
+-# CTest support
+-enable_testing()
+-add_test(NAME mel_spectrogram_test
+-    COMMAND test_mel
+-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+-)
+-add_test(NAME audio_encoder_test
+-    COMMAND test_encoder
+-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+-)
+-add_test(NAME text_decoder_test
+-    COMMAND test_decoder
+-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+-)
+-add_test(NAME audio_injection_test
+-    COMMAND test_injection
+-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+-)
++if(QWEN3_ASR_BUILD_TESTS_AND_CLI)
++    # CTest support
++    enable_testing()
++    add_test(NAME mel_spectrogram_test
++        COMMAND test_mel
++        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
++    )
++    add_test(NAME audio_encoder_test
++        COMMAND test_encoder
++        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
++    )
++    add_test(NAME text_decoder_test
++        COMMAND test_decoder
++        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
++    )
++    add_test(NAME audio_injection_test
++        COMMAND test_injection
++        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
++    )
+ 
+-# Test conv1 output
+-add_executable(test_conv1
+-    tests/test_conv1.cpp
+-)
+-target_include_directories(test_conv1 PRIVATE
+-    ${GGML_DIR}/include
+-)
+-target_link_libraries(test_conv1 PRIVATE
+-    audio_encoder
+-    Threads::Threads
+-)
++    # Test conv1 output
++    add_executable(test_conv1
++        tests/test_conv1.cpp
++    )
++    target_include_directories(test_conv1 PRIVATE
++        ${GGML_DIR}/include
++    )
++    target_link_libraries(test_conv1 PRIVATE
++        audio_encoder
++        Threads::Threads
++    )
++endif()
 diff --git a/src/audio_encoder.cpp b/src/audio_encoder.cpp
-index 682e9fb..1603bb4 100644
+index 682e9fb..a9b3928 100644
 --- a/src/audio_encoder.cpp
 +++ b/src/audio_encoder.cpp
-@@ -40,19 +40,25 @@ AudioEncoder::~AudioEncoder() {
- }
- 
- bool AudioEncoder::load_model(const std::string & model_path) {
-+    std::printf("[Debug] AudioEncoder::load_model: starting GGUFLoader::load...\n"); std::fflush(stdout);
-     GGUFLoader loader;
-     if (!loader.load(model_path, model_)) {
-         error_msg_ = loader.get_error();
-+        std::printf("[Debug] AudioEncoder::load_model: GGUFLoader::load failed\n"); std::fflush(stdout);
-         return false;
-     }
-     
-+    std::printf("[Debug] AudioEncoder::load_model: initializing CPU backend...\n"); std::fflush(stdout);
-     state_.backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
-     if (!state_.backend_cpu) {
-         error_msg_ = "Failed to initialize CPU backend";
-+        std::printf("[Debug] AudioEncoder::load_model: CPU backend init failed\n"); std::fflush(stdout);
-         return false;
-     }
- 
-+    std::printf("[Debug] AudioEncoder::load_model: initializing GPU backend...\n"); std::fflush(stdout);
-     state_.backend_gpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
-+    std::printf("[Debug] AudioEncoder::load_model: GPU backend init returned %p\n", (void*)state_.backend_gpu); std::fflush(stdout);
- 
-     std::vector<ggml_backend_t> backends;
-     std::vector<ggml_backend_buffer_type_t> backend_bufts;
-@@ -71,14 +77,18 @@ bool AudioEncoder::load_model(const std::string & model_path) {
-     }
-     backend_bufts.push_back(cpu_buft);
- 
-+    std::printf("[Debug] AudioEncoder::load_model: creating backend scheduler...\n"); std::fflush(stdout);
-     state_.sched = ggml_backend_sched_new(backends.data(), backend_bufts.data(), backends.size(), QWEN3_ASR_MAX_NODES, false, true);
-     if (!state_.sched) {
-         error_msg_ = "Failed to create backend scheduler";
-+        std::printf("[Debug] AudioEncoder::load_model: scheduler creation failed\n"); std::fflush(stdout);
-         return false;
-     }
-     
-+    std::printf("[Debug] AudioEncoder::load_model: resizing compute_meta...\n"); std::fflush(stdout);
-     state_.compute_meta.resize(ggml_tensor_overhead() * QWEN3_ASR_MAX_NODES + ggml_graph_overhead());
-     
-+    std::printf("[Debug] AudioEncoder::load_model success\n"); std::fflush(stdout);
-     return true;
- }
- 
-@@ -397,10 +407,24 @@ bool AudioEncoder::encode(const float * mel_data, int n_mel, int n_frames,
+@@ -397,10 +397,24 @@ bool AudioEncoder::encode(const float * mel_data, int n_mel, int n_frames,
          std::vector<float> chunk_output(out_ctx * out_state);
          ggml_backend_tensor_get(embd_conv, chunk_output.data(), 0, out_ctx * out_state * sizeof(float));
          
@@ -197,7 +262,7 @@ index 682e9fb..1603bb4 100644
          }
          
          all_conv_outputs.insert(all_conv_outputs.end(), chunk_output.begin(), chunk_output.end());
-@@ -658,10 +682,24 @@ bool AudioEncoder::encode_no_chunk(const float * mel_data, int n_mel, int n_fram
+@@ -658,10 +672,24 @@ bool AudioEncoder::encode_no_chunk(const float * mel_data, int n_mel, int n_fram
      
      ggml_backend_sched_reset(state_.sched);
      
@@ -330,7 +395,7 @@ index 0c3722d..3118421 100644
          model.mmap_size = 0;
      }
 diff --git a/src/gguf_loader.cpp b/src/gguf_loader.cpp
-index e37b670..63cad5c 100644
+index e37b670..9f6b5b1 100644
 --- a/src/gguf_loader.cpp
 +++ b/src/gguf_loader.cpp
 @@ -3,10 +3,17 @@
@@ -351,59 +416,7 @@ index e37b670..63cad5c 100644
  
  namespace qwen3_asr {
  
-@@ -15,40 +22,51 @@ GGUFLoader::GGUFLoader() = default;
- GGUFLoader::~GGUFLoader() = default;
- 
- bool GGUFLoader::load(const std::string & path, audio_encoder_model & model) {
-+    std::printf("[Debug] GGUFLoader::load start for %s\n", path.c_str()); std::fflush(stdout);
-     struct ggml_context * meta_ctx = nullptr;
-     struct gguf_init_params params = {
-         /*.no_alloc =*/ true,
-         /*.ctx      =*/ &meta_ctx,
-     };
-     
-+    std::printf("[Debug] GGUFLoader::load: calling gguf_init_from_file...\n"); std::fflush(stdout);
-     struct gguf_context * ctx = gguf_init_from_file(path.c_str(), params);
-     if (!ctx) {
-         error_msg_ = "Failed to open GGUF file: " + path;
-+        std::printf("[Debug] GGUFLoader::load: gguf_init_from_file failed\n"); std::fflush(stdout);
-         return false;
-     }
-     
-+    std::printf("[Debug] GGUFLoader::load: calling parse_hparams...\n"); std::fflush(stdout);
-     if (!parse_hparams(ctx, model)) {
-         gguf_free(ctx);
-         if (meta_ctx) ggml_free(meta_ctx);
-+        std::printf("[Debug] GGUFLoader::load: parse_hparams failed\n"); std::fflush(stdout);
-         return false;
-     }
-     
-+    std::printf("[Debug] GGUFLoader::load: calling create_tensors...\n"); std::fflush(stdout);
-     if (!create_tensors(ctx, model)) {
-         gguf_free(ctx);
-         if (meta_ctx) ggml_free(meta_ctx);
-+        std::printf("[Debug] GGUFLoader::load: create_tensors failed\n"); std::fflush(stdout);
-         return false;
-     }
-     
-+    std::printf("[Debug] GGUFLoader::load: calling load_tensor_data...\n"); std::fflush(stdout);
-     if (!load_tensor_data(path, ctx, model)) {
-         free_model(model);
-         gguf_free(ctx);
-         if (meta_ctx) ggml_free(meta_ctx);
-+        std::printf("[Debug] GGUFLoader::load: load_tensor_data failed\n"); std::fflush(stdout);
-         return false;
-     }
-     
-+    std::printf("[Debug] GGUFLoader::load: freeing gguf context...\n"); std::fflush(stdout);
-     gguf_free(ctx);
-     if (meta_ctx) ggml_free(meta_ctx);
-     
-+    std::printf("[Debug] GGUFLoader::load success\n"); std::fflush(stdout);
-     return true;
- }
- 
-@@ -65,24 +83,53 @@ bool GGUFLoader::parse_hparams(struct gguf_context * ctx, audio_encoder_model &
+@@ -65,24 +72,53 @@ bool GGUFLoader::parse_hparams(struct gguf_context * ctx, audio_encoder_model &
          return gguf_get_val_f32(ctx, idx);
      };
      
@@ -472,7 +485,7 @@ index e37b670..63cad5c 100644
      
      return true;
  }
-@@ -127,28 +174,33 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+@@ -127,28 +163,33 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
              total_elements = (size * blck_size) / type_size;
          }
          
@@ -513,7 +526,7 @@ index e37b670..63cad5c 100644
              ne[0] = model.hparams.d_model;
              n_dims = 1;
          } else if (strstr(name, "ffn_up.weight")) {
-@@ -163,26 +215,31 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+@@ -163,26 +204,31 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
              ne[0] = model.hparams.ffn_dim;
              n_dims = 1;
          } else if (strstr(name, "ffn_down.bias") || strstr(name, "ffn_norm.weight") || 
@@ -551,7 +564,7 @@ index e37b670..63cad5c 100644
          } else {
              int64_t remaining = total_elements;
              ne[0] = remaining;
-@@ -197,35 +254,38 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+@@ -197,35 +243,38 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
          ggml_set_name(tensor, name);
          model.tensors[name] = tensor;
          
@@ -605,7 +618,7 @@ index e37b670..63cad5c 100644
                  layer_idx >= 0 && layer_idx < model.hparams.n_encoder_layers) {
                  auto & layer = model.layers[layer_idx];
                  
-@@ -235,16 +295,16 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+@@ -235,16 +284,16 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
                  else if (strstr(name, "attn_k.bias")) layer.attn_k_b = tensor;
                  else if (strstr(name, "attn_v.weight")) layer.attn_v_w = tensor;
                  else if (strstr(name, "attn_v.bias")) layer.attn_v_b = tensor;
@@ -628,17 +641,14 @@ index e37b670..63cad5c 100644
              }
          }
      }
-@@ -254,6 +314,46 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
+@@ -254,6 +303,38 @@ bool GGUFLoader::create_tensors(struct gguf_context * ctx, audio_encoder_model &
  
  bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context * ctx, 
                                     audio_encoder_model & model) {
-+    std::printf("[Debug] GGUFLoader::load_tensor_data start\n"); std::fflush(stdout);
 +#if defined(_WIN32)
-+    std::printf("[Debug] GGUFLoader::load_tensor_data: calling CreateFileA...\n"); std::fflush(stdout);
 +    HANDLE hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 +    if (hFile == INVALID_HANDLE_VALUE) {
 +        error_msg_ = "Failed to open file for mmap: " + path;
-+        std::printf("[Debug] GGUFLoader::load_tensor_data: CreateFileA failed\n"); std::fflush(stdout);
 +        return false;
 +    }
 +    
@@ -646,27 +656,22 @@ index e37b670..63cad5c 100644
 +    if (!GetFileSizeEx(hFile, &size)) {
 +        error_msg_ = "Failed to get file size: " + path;
 +        CloseHandle(hFile);
-+        std::printf("[Debug] GGUFLoader::load_tensor_data: GetFileSizeEx failed\n"); std::fflush(stdout);
 +        return false;
 +    }
 +    
-+    std::printf("[Debug] GGUFLoader::load_tensor_data: calling CreateFileMappingA (size=%lld)...\n", size.QuadPart); std::fflush(stdout);
 +    HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
 +    if (hMapping == NULL) {
 +        error_msg_ = "Failed to create file mapping: " + path;
 +        CloseHandle(hFile);
-+        std::printf("[Debug] GGUFLoader::load_tensor_data: CreateFileMappingA failed\n"); std::fflush(stdout);
 +        return false;
 +    }
 +    
-+    std::printf("[Debug] GGUFLoader::load_tensor_data: calling MapViewOfFile...\n"); std::fflush(stdout);
 +    void * mmap_addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
 +    CloseHandle(hMapping);
 +    CloseHandle(hFile);
 +    
 +    if (mmap_addr == NULL) {
 +        error_msg_ = "Failed to map view of file: " + path;
-+        std::printf("[Debug] GGUFLoader::load_tensor_data: MapViewOfFile failed\n"); std::fflush(stdout);
 +        return false;
 +    }
 +    
@@ -675,7 +680,7 @@ index e37b670..63cad5c 100644
      int fd = open(path.c_str(), O_RDONLY);
      if (fd < 0) {
          error_msg_ = "Failed to open file for mmap: " + path;
-@@ -275,11 +375,14 @@ bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context
+@@ -275,11 +356,14 @@ bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context
          return false;
      }
      
@@ -692,30 +697,7 @@ index e37b670..63cad5c 100644
      uint8_t * data_base = (uint8_t *)mmap_addr + data_offset;
      
      // Find largest tensor for max_tensor_size hint
-@@ -290,22 +393,40 @@ bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context
-         if (sz > max_tensor_size) max_tensor_size = sz;
-     }
- 
-+    std::printf("[Debug] GGUFLoader::load_tensor_data: checking GPU device...\n"); std::fflush(stdout);
-     // Try GPU device buffer (zero-copy on Apple Silicon unified memory)
-     ggml_backend_dev_t gpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
-+    std::printf("[Debug] GGUFLoader::load_tensor_data: gpu_dev is %p\n", (void*)gpu_dev); std::fflush(stdout);
-     if (gpu_dev) {
--        model.buffer = ggml_backend_dev_buffer_from_host_ptr(gpu_dev, data_base, total_size, max_tensor_size);
-+        ggml_backend_dev_props props;
-+        ggml_backend_dev_get_props(gpu_dev, &props);
-+        if (props.caps.buffer_from_host_ptr) {
-+            std::printf("[Debug] GGUFLoader::load_tensor_data: calling ggml_backend_dev_buffer_from_host_ptr...\n"); std::fflush(stdout);
-+            model.buffer = ggml_backend_dev_buffer_from_host_ptr(gpu_dev, data_base, total_size, max_tensor_size);
-+            std::printf("[Debug] GGUFLoader::load_tensor_data: gpu buffer is %p\n", (void*)model.buffer); std::fflush(stdout);
-+        } else {
-+            std::printf("[Debug] GGUFLoader::load_tensor_data: GPU device does not support buffer_from_host_ptr\n"); std::fflush(stdout);
-+        }
-     }
-     if (!model.buffer) {
-+        std::printf("[Debug] GGUFLoader::load_tensor_data: calling ggml_backend_cpu_buffer_from_ptr...\n"); std::fflush(stdout);
-         model.buffer = ggml_backend_cpu_buffer_from_ptr(data_base, total_size);
-+        std::printf("[Debug] GGUFLoader::load_tensor_data: cpu buffer is %p\n", (void*)model.buffer); std::fflush(stdout);
+@@ -300,7 +384,11 @@ bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context
      }
      if (!model.buffer) {
          error_msg_ = "Failed to create buffer from mmap";
@@ -727,23 +709,8 @@ index e37b670..63cad5c 100644
 +#endif
          model.mmap_addr = nullptr;
          model.mmap_size = 0;
-+        std::printf("[Debug] GGUFLoader::load_tensor_data: failed to create any buffer\n"); std::fflush(stdout);
          return false;
-     }
-     
-+    std::printf("[Debug] GGUFLoader::load_tensor_data: setting tensor buffers...\n"); std::fflush(stdout);
-     for (int64_t i = 0; i < n_tensors; ++i) {
-         const char * name = gguf_get_tensor_name(ctx, i);
-         size_t offset = gguf_get_tensor_offset(ctx, i);
-@@ -318,6 +439,7 @@ bool GGUFLoader::load_tensor_data(const std::string & path, struct gguf_context
-         tensor->data = data_base + offset;
-     }
-     
-+    std::printf("[Debug] GGUFLoader::load_tensor_data success\n"); std::fflush(stdout);
-     return true;
- }
- 
-@@ -331,7 +453,11 @@ void free_model(audio_encoder_model & model) {
+@@ -331,7 +419,11 @@ void free_model(audio_encoder_model & model) {
          model.ctx = nullptr;
      }
      if (model.mmap_addr) {
@@ -769,16 +736,15 @@ index f4ffe22..f8ea344 100644
      struct ggml_tensor * ln_post_b = nullptr;
      struct ggml_tensor * proj1_w = nullptr;
 diff --git a/src/qwen3_asr.cpp b/src/qwen3_asr.cpp
-index c1321e3..c9075db 100644
+index c1321e3..4da2967 100644
 --- a/src/qwen3_asr.cpp
 +++ b/src/qwen3_asr.cpp
-@@ -18,16 +18,26 @@ static int64_t get_time_ms() {
+@@ -18,10 +18,15 @@ static int64_t get_time_ms() {
  Qwen3ASR::Qwen3ASR() = default;
  Qwen3ASR::~Qwen3ASR() = default;
  
 -bool Qwen3ASR::load_model(const std::string & model_path) {
 +bool Qwen3ASR::load_model(const std::string & model_path, const std::string & mmproj_path) {
-+    std::printf("[Debug] Qwen3ASR::load_model start\n"); std::fflush(stdout);
      int64_t t_start = get_time_ms();
      
 -    if (!encoder_.load_model(model_path)) {
@@ -787,21 +753,11 @@ index c1321e3..c9075db 100644
 +        encoder_path = mmproj_path;
 +    }
 +    
-+    std::printf("[Debug] Qwen3ASR::load_model: Loading audio encoder from %s...\n", encoder_path.c_str()); std::fflush(stdout);
 +    if (!encoder_.load_model(encoder_path)) {
          error_msg_ = "Failed to load audio encoder: " + encoder_.get_error();
-+        std::printf("[Debug] Qwen3ASR::load_model: Audio encoder load failed\n"); std::fflush(stdout);
          return false;
      }
-     
-+    std::printf("[Debug] Qwen3ASR::load_model: Loading text decoder from %s...\n", model_path.c_str()); std::fflush(stdout);
-     if (!decoder_.load_model(model_path)) {
-         error_msg_ = "Failed to load text decoder: " + decoder_.get_error();
-+        std::printf("[Debug] Qwen3ASR::load_model: Text decoder load failed\n"); std::fflush(stdout);
-         return false;
-     }
-     
-@@ -35,6 +45,13 @@ bool Qwen3ASR::load_model(const std::string & model_path) {
+@@ -35,6 +40,13 @@ bool Qwen3ASR::load_model(const std::string & model_path) {
      
      model_loaded_ = true;
      
@@ -829,7 +785,7 @@ index 5f76dd5..6c09e61 100644
      // Transcribe audio file (WAV format, 16kHz mono)
      // Returns transcription result
 diff --git a/src/text_decoder.cpp b/src/text_decoder.cpp
-index bbefe7c..a438a38 100644
+index bbefe7c..83c333c 100644
 --- a/src/text_decoder.cpp
 +++ b/src/text_decoder.cpp
 @@ -5,10 +5,17 @@
@@ -947,19 +903,7 @@ index bbefe7c..a438a38 100644
      uint8_t * data_base = (uint8_t *)mmap_addr + data_offset;
      
      const int64_t n_tensors = gguf_get_n_tensors(ctx);
-@@ -304,14 +352,22 @@ bool TextDecoder::load_tensor_data(const std::string & path, struct gguf_context
-     // Try GPU device buffer (zero-copy on Apple Silicon unified memory)
-     ggml_backend_dev_t gpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
-     if (gpu_dev) {
--        model_.buffer = ggml_backend_dev_buffer_from_host_ptr(gpu_dev, data_base, total_size, max_tensor_size);
-+        ggml_backend_dev_props props;
-+        ggml_backend_dev_get_props(gpu_dev, &props);
-+        if (props.caps.buffer_from_host_ptr) {
-+            model_.buffer = ggml_backend_dev_buffer_from_host_ptr(gpu_dev, data_base, total_size, max_tensor_size);
-+        }
-     }
-     if (!model_.buffer) {
-         model_.buffer = ggml_backend_cpu_buffer_from_ptr(data_base, total_size);
+@@ -311,7 +359,11 @@ bool TextDecoder::load_tensor_data(const std::string & path, struct gguf_context
      }
      if (!model_.buffer) {
          error_msg_ = "Failed to create buffer from mmap";
@@ -972,7 +916,7 @@ index bbefe7c..a438a38 100644
          model_.mmap_addr = nullptr;
          model_.mmap_size = 0;
          return false;
-@@ -771,7 +827,11 @@ void free_decoder_model(text_decoder_model & model) {
+@@ -771,7 +823,11 @@ void free_decoder_model(text_decoder_model & model) {
          model.ctx = nullptr;
      }
      if (model.mmap_addr) {
