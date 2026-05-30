@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -122,6 +123,8 @@ public:
         const int samples = cfg_.format.totalSamplesPerFrame();
         renderScratchI16_.resize(static_cast<std::size_t>(samples));
         captureScratchI16_.resize(static_cast<std::size_t>(samples));
+        renderDestI16_.resize(static_cast<std::size_t>(samples));
+        captureDestI16_.resize(static_cast<std::size_t>(samples));
 
 #if VOICE_RUNTIME_ENABLE_WEBRTC_VAD
         if (cfg_.enableVad) {
@@ -264,9 +267,11 @@ private:
     }
 
     void drainRenderQueue() {
-        if (!refIn_) return;
         AudioFrameHandle ref;
-        if (refIn_->tryPop(ref)) {
+        // Keep WebRTC reverse/capture streams in lockstep: one 10 ms render
+        // reference frame per 10 ms microphone frame. Draining a prefilled TTS
+        // queue here would advance the APM render timeline ahead of capture.
+        if (refIn_ && refIn_->tryPop(ref)) {
             processRenderFrame(*ref);
             ref.reset();
         }
@@ -275,6 +280,7 @@ private:
     bool processRenderFrame(const AudioFrame& frame) {
 #if VOICE_RUNTIME_ENABLE_WEBRTC_APM
         if (!apm_) return false;
+        validateRenderFormat(frame.format);
 
         const int samples = frame.format.totalSamplesPerFrame();
         const int16_t* srcI16 = nullptr;
@@ -290,9 +296,10 @@ private:
             srcI16 = renderScratchI16_.data();
         }
 
-        std::vector<int16_t> destI16(samples);
+        if (renderDestI16_.size() < static_cast<std::size_t>(samples))
+            renderDestI16_.resize(static_cast<std::size_t>(samples));
         webrtc::StreamConfig streamCfg(frame.format.sampleRate, frame.format.channels);
-        return apm_->ProcessReverseStream(srcI16, streamCfg, streamCfg, destI16.data()) ==
+        return apm_->ProcessReverseStream(srcI16, streamCfg, streamCfg, renderDestI16_.data()) ==
                webrtc::AudioProcessing::kNoError;
 #else
         (void)frame;
@@ -321,21 +328,21 @@ private:
             srcI16 = captureScratchI16_.data();
         }
 
-        std::vector<int16_t> destI16(samples);
+        if (captureDestI16_.size() < static_cast<std::size_t>(samples))
+            captureDestI16_.resize(static_cast<std::size_t>(samples));
         webrtc::StreamConfig streamCfg(input.format.sampleRate, input.format.channels);
 
-        apm_->set_stream_delay_ms(cfg_.estimatedRenderDelayMs);
-
-        const int rc = apm_->ProcessStream(srcI16, streamCfg, streamCfg, destI16.data());
+        const int rc = apm_->ProcessStream(srcI16, streamCfg, streamCfg, captureDestI16_.data());
         if (rc != webrtc::AudioProcessing::kNoError) return false;
 
         if (output.format.sampleFormat == SampleFormat::Int16) {
-            output.pcm16 = std::move(destI16);
+            std::memcpy(output.pcm16.data(), captureDestI16_.data(),
+                        static_cast<std::size_t>(samples) * sizeof(int16_t));
         } else {
             if (output.pcmF32.size() < static_cast<std::size_t>(samples))
                 output.pcmF32.resize(static_cast<std::size_t>(samples));
             for (int i = 0; i < samples; ++i)
-                output.pcmF32[static_cast<std::size_t>(i)] = destI16[i] / 32768.0f;
+                output.pcmF32[static_cast<std::size_t>(i)] = captureDestI16_[static_cast<std::size_t>(i)] / 32768.0f;
         }
         return true;
 #else
@@ -344,6 +351,22 @@ private:
         output.format = cfg_.format;
         return true;
 #endif
+    }
+
+    void validateRenderFormat(const AudioFormat& f) const {
+        if (f.sampleRate == cfg_.format.sampleRate &&
+            f.channels == cfg_.format.channels &&
+            f.frameMs == cfg_.format.frameMs &&
+            f.sampleFormat == SampleFormat::Int16) {
+            return;
+        }
+
+        std::fprintf(stderr,
+            "[WebRtcDSP] Fatal render format mismatch: got %d Hz, %d ch, %d ms, %s; expected %d Hz, %d ch, %d ms, Int16\n",
+            f.sampleRate, f.channels, f.frameMs,
+            f.sampleFormat == SampleFormat::Int16 ? "Int16" : "Float32",
+            cfg_.format.sampleRate, cfg_.format.channels, cfg_.format.frameMs);
+        std::abort();
     }
 
     bool evaluateVad(const AudioFrame& frame) {
@@ -445,6 +468,8 @@ private:
 
     std::vector<int16_t> renderScratchI16_;
     std::vector<int16_t> captureScratchI16_;
+    std::vector<int16_t> renderDestI16_;
+    std::vector<int16_t> captureDestI16_;
     std::vector<int16_t> vadScratchI16_;
 
 #if VOICE_RUNTIME_ENABLE_WEBRTC_APM

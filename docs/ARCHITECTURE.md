@@ -194,23 +194,27 @@ parsing del formato di output dell'LLM.
 
 ---
 
-## AEC — Allineamento Render/Capture (Drain Doppio)
+## AEC — Allineamento Render/Capture
 
-La corretta convergenza di AEC3 richiede che ogni frame di cattura (microfono) sia
-preceduto da **tutti** i frame di riferimento (TTS) corrispondenti. Il pattern di
-drain nel `WebRtcDspNode` e' il seguente:
+La corretta convergenza di AEC3 richiede che il flusso reverse/render (TTS
+reference) e il flusso capture (microfono) avanzino con la stessa cadenza
+temporale. Con frame da 10 ms, il `WebRtcDspNode` deve quindi processare al
+massimo **un frame di riferimento TTS per ogni frame microfono**.
+
+Il pattern nel `WebRtcDspNode` e' il seguente:
 
 ```
 while running:
-    drainRenderQueue()        ← PRIMA del pop bloccante
     pop mic frame (bloccante)
-    drainRenderQueue()        ← DOPO il pop bloccante
+    process one render frame if available (non bloccante)
     processCaptureFrame(mic)
     pushCleanFrame()
 ```
 
-`drainRenderQueue()` usa un ciclo `while (tryPop())` — non `if` — per consumare
-tutti i frame TTS disponibili, non solo uno per ciclo.
+`drainRenderQueue()` usa `tryPop()` per non bloccare il path capture, ma non deve
+svuotare aggressivamente una queue TTS gia' pre-riempita. Un `while (tryPop())`
+farebbe avanzare il reverse stream di WebRTC molto piu' velocemente del capture
+stream, rompendo l'allineamento temporale necessario all'AEC.
 
 ### Validazione formato AEC reference (Bug 5)
 

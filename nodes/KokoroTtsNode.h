@@ -230,7 +230,6 @@ protected:
                     v *= scale;
                 }
             }
-
             // Clear stale frames ONLY if we were completely inactive or interrupted
             const bool wasInactive = !ttsState_ || !ttsState_->isActive();
             if (wasInactive || (intSig_ && intSig_->check())) {
@@ -353,6 +352,7 @@ private:
                 auto tG2pStart = std::chrono::steady_clock::now();
                 std::string phonemes = textToPhonemes(text, espeakVoice);
                 if (!phonemes.empty()) {
+                    preserveTerminalPunctuation(text, phonemes);
                     textToSynth = phonemes;
                     isPhonemes  = true;
                 }
@@ -434,6 +434,29 @@ private:
     }
 #endif
 
+    static void preserveTerminalPunctuation(const std::string& text,
+                                            std::string& phonemes) {
+        auto textLast = text.find_last_not_of(" \t\r\n");
+        if (textLast == std::string::npos || phonemes.empty()) return;
+
+        const char terminal = text[textLast];
+        if (terminal != '.' && terminal != '?' && terminal != '!' &&
+            terminal != ';' && terminal != ',') {
+            return;
+        }
+
+        auto phonemeLast = phonemes.find_last_not_of(" \t\r\n");
+        if (phonemeLast != std::string::npos) {
+            const char existing = phonemes[phonemeLast];
+            if (existing == '.' || existing == '?' || existing == '!' ||
+                existing == ';' || existing == ',') {
+                return;
+            }
+        }
+
+        phonemes.push_back(terminal);
+    }
+
     // ---- Frame segmentation & output ----------------------------------------
 
     /// Segment synthesized audio into 10ms frames and push to both queues.
@@ -451,10 +474,14 @@ private:
                                   config_.aecRefFormat.sampleRate);
         }
 
-        // Convert full audio to int16 at native rate for speaker
-        std::vector<int16_t> audioSpk(audio.size());
-        for (std::size_t i = 0; i < audio.size(); ++i) {
-            float clamped = std::max(-1.0f, std::min(1.0f, audio[i]));
+        // Convert speaker audio to the configured output rate before framing.
+        // A mislabeled sample rate sounds like recognizable but badly distorted speech.
+        const std::vector<float> audioSpkF32 =
+            resampleFloat(audio, sampleRate, config_.speakerFormat.sampleRate);
+
+        std::vector<int16_t> audioSpk(audioSpkF32.size());
+        for (std::size_t i = 0; i < audioSpkF32.size(); ++i) {
+            float clamped = std::max(-1.0f, std::min(1.0f, audioSpkF32[i]));
             audioSpk[i] = static_cast<int16_t>(clamped * 32767.0f);
         }
 
@@ -466,8 +493,6 @@ private:
             (audio16k.size() + refSamplesPerFrame - 1) / static_cast<std::size_t>(refSamplesPerFrame);
 
         std::size_t spkIdx = 0;
-        std::size_t refIdx = 0;
-
         for (std::size_t f = 0; f < totalSpkFrames; ++f) {
             // Check interrupt between frames
             if (intSig_ && intSig_->check()) {
@@ -507,7 +532,7 @@ private:
                 spkIdx += count;
 
                 // Push AEC reference first (timing requirement)
-                if (aecRefOut_ && refIdx < audio16k.size()) {
+                if (aecRefOut_ && !audio16k.empty()) {
                     // Determine corresponding ref frame index
                     // Ratio: for every speaker frame we advance proportionally
                     // in the ref buffer.
@@ -578,6 +603,27 @@ private:
             const float sample = src[idx0] * (1.0f - frac) + src[idx1] * frac;
             const float clamped = std::max(-1.0f, std::min(1.0f, sample));
             out[i] = static_cast<int16_t>(clamped * 32767.0f);
+        }
+        return out;
+    }
+
+    static std::vector<float> resampleFloat(const std::vector<float>& src,
+                                            int srcRate, int dstRate) {
+        if (srcRate <= 0 || dstRate <= 0 || src.empty()) return {};
+        if (srcRate == dstRate) return src;
+
+        const double ratio = static_cast<double>(srcRate) /
+                             static_cast<double>(dstRate);
+        const std::size_t outLen = static_cast<std::size_t>(
+            static_cast<double>(src.size()) / ratio);
+        std::vector<float> out(outLen);
+
+        for (std::size_t i = 0; i < outLen; ++i) {
+            const double srcPos = static_cast<double>(i) * ratio;
+            const std::size_t idx0 = static_cast<std::size_t>(srcPos);
+            const std::size_t idx1 = std::min(idx0 + 1, src.size() - 1);
+            const float frac = static_cast<float>(srcPos - static_cast<double>(idx0));
+            out[i] = src[idx0] * (1.0f - frac) + src[idx1] * frac;
         }
         return out;
     }

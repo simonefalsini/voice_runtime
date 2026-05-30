@@ -15,7 +15,7 @@ Questo documento fornisce un riepilogo dello stato attuale dello sviluppo del ru
 
 | Bug | Descrizione | Fix |
 |-----|-------------|-----|
-| **Bug 1** | `drainRenderQueue()` usava `if` invece di `while` — un solo frame per ciclo | Cambiato in `while (tryPop())` |
+| **Bug 1** | `drainRenderQueue()` deve mantenere render e capture in lockstep temporale | Usa `tryPop()` non bloccante, massimo un frame TTS per frame mic |
 | **Bug 2** | Drain avveniva solo dopo il pop bloccante, mai prima | Aggiunto drain **prima** del `pop()` e **dopo** |
 | **Bug 3** | `aecRefQueue` da 256 frame (2.56s pre-fill) — offset non compensabile da AEC3 | Capacità ridotta a **32 frame** (320ms) |
 | **Bug 4** | `TtsStateSignal::setActive(true)` potenzialmente dopo il primo push | Contratto documentato con commento esplicito; codice già corretto |

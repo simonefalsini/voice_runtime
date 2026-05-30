@@ -157,7 +157,7 @@ int main(int argc, char* argv[]) {
         }
     }
     const std::string ttsModelPath = "models/tts/kokoro-v1.1-zh.onnx";
-    const std::string voicesPath   = "models/tts/voices-v1.0.bin";
+    const std::string voicesPath   = "models/tts/voices.bin";
     const std::string espeakData   = "models/espeak-ng-data";
 
     // Print header
@@ -211,7 +211,7 @@ int main(int argc, char* argv[]) {
     // VAD events (for display)
     VadEventQueue vadEventQueue(64, QueueOverflowPolicy::DropOldest, "vadEvents");
     // TTS → AEC (render reference, 16kHz)
-    AudioFrameQueue aecRefQueue(256, QueueOverflowPolicy::BlockProducer, "aecRefQueue");
+    AudioFrameQueue aecRefQueue(32, QueueOverflowPolicy::BlockProducer, "aecRefQueue");
     // TTS → speaker output (24kHz)
     AudioFrameQueue speakerQueue(256, QueueOverflowPolicy::BlockProducer, "speakerQueue");
     // TTS text input
@@ -283,6 +283,8 @@ int main(int argc, char* argv[]) {
     KokoroTtsConfig ttsCfg;
     ttsCfg.modelPath = ttsModelPath;
     ttsCfg.voicesPath = voicesPath;
+    ttsCfg.dictDir = "models/tts/dict";
+    ttsCfg.vocabPath = "models/tts/dict/vocab.txt";
     ttsCfg.espeakDataPath = espeakData;
     ttsCfg.speakerFormat = speakerFormat;
     ttsCfg.aecRefFormat = aecRefFormat;
