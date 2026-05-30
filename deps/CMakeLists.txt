@@ -175,6 +175,8 @@ set(AUDIO_PROCESSING_SOURCES
     WebRTC/modules/audio_processing/splitting_filter.cc
     WebRTC/modules/audio_processing/three_band_filter_bank.cc
     WebRTC/modules/audio_processing/utility/cascaded_biquad_filter.cc
+    WebRTC/modules/audio_processing/utility/delay_estimator.cc
+    WebRTC/modules/audio_processing/utility/delay_estimator_wrapper.cc
     WebRTC/modules/audio_processing/utility/pffft_wrapper.cc
 )
 

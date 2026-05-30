@@ -1627,6 +1627,17 @@ def generate_webrtc_sources(deps_dir):
     
     return "\n\n".join(cmake_parts)
 
+def ensure_registered_field_trials_header(deps_dir):
+    webrtc_dir = os.path.join(deps_dir, "WebRTC")
+    header_path = os.path.join(webrtc_dir, "experiments", "registered_field_trials.h")
+    if os.path.exists(webrtc_dir) and not os.path.exists(header_path):
+        print("experiments/registered_field_trials.h not found. Re-generating it...")
+        try:
+            run_cmd([sys.executable, os.path.join("experiments", "field_trials.py"), "header", "--output", os.path.join("experiments", "registered_field_trials.h")], cwd=webrtc_dir)
+            print("Successfully generated experiments/registered_field_trials.h")
+        except Exception as e:
+            print(f"Warning: Failed to generate registered_field_trials.h: {e}")
+
 def update_cmakelists_sources(deps_dir):
     print("--- Automatically Scanning and Updating WebRTC Sources in CMakeLists.txt ---")
     cmakelists_path = os.path.join(deps_dir, "CMakeLists.txt")
@@ -1671,6 +1682,9 @@ def main():
     
     deps_dir = os.path.dirname(os.path.abspath(__file__))
     dist_dir = os.path.join(os.path.dirname(deps_dir), "libraries")
+    
+    # Ensure experiments/registered_field_trials.h is present
+    ensure_registered_field_trials_header(deps_dir)
     
     # Automatically scan and update sources in CMakeLists.txt at startup
     update_cmakelists_sources(deps_dir)
@@ -1742,6 +1756,14 @@ def main():
     
     # Generate CMake import configurations
     generate_cmake_imports(dist_dir)
+    
+    # Automatically update commit hashes / patches at the end of a successful build
+    print("\n--- Updating Dependency Metadata and Patches ---")
+    try:
+        run_cmd([sys.executable, os.path.join(deps_dir, "generate_patches.py")])
+    except Exception as e:
+        print(f"Warning: Failed to auto-update patches/metadata: {e}")
+        
     print("\nAll dependencies built and packaging complete!")
 
 if __name__ == "__main__":

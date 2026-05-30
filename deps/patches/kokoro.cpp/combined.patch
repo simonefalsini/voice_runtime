@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 9e322f9..770d03b 100644
+index 9e322f9..397ff37 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -11,10 +11,7 @@ if (MSVC)
@@ -116,9 +116,3 @@ index d353b18..9845eaf 100644
      }
  }
 +#endif
-diff --git a/third_party/onnxruntime/lib/mac_arm64/libonnxruntime.1.23.2.dylib b/third_party/onnxruntime/lib/mac_arm64/libonnxruntime.1.23.2.dylib
-old mode 100755
-new mode 100644
-diff --git a/third_party/onnxruntime/lib/mac_arm64/libonnxruntime.dylib b/third_party/onnxruntime/lib/mac_arm64/libonnxruntime.dylib
-old mode 100755
-new mode 100644

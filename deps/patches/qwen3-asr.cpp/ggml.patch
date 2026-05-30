@@ -1,6 +1,0 @@
-diff --git a/ggml b/ggml
---- a/ggml
-+++ b/ggml
-@@ -1 +1 @@
--Subproject commit a8db410a252c8c8f2d120c6f2e7133ebe032f35d
-+Subproject commit a8db410a252c8c8f2d120c6f2e7133ebe032f35d-dirty

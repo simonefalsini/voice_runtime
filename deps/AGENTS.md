@@ -60,10 +60,15 @@ Local modifications (e.g., Windows compatibility workarounds, CMake customizatio
 To integrate a new dependency, follow these steps:
 
 ### Step 1: Update `download_deps.py`
-Add the repository clone URL and local folder mapping:
+Add a new entry to the `dependencies` list in `download_deps.py`:
 ```python
-# Example: Clones the library into deps/new-library
-clone_repo("https://github.com/example/new-library.git", os.path.join(deps_dir, "new-library"))
+    dependencies = [
+        ...
+        {
+            "name": "new-library",
+            "url": "https://github.com/example/new-library.git"
+        }
+    ]
 ```
 
 ### Step 2: Configure the Static Build in `build_deps.py`
@@ -120,3 +125,52 @@ When building or writing code patches, respect the following constraints:
 
 ### D. Symlink Resolution on Windows
 - Avoid `shutil.copytree` when exporting header directories that contain Unix relative symlinks. Instead, write manual walking functions that resolve the symlinks to their absolute targets and safely handle any Windows-specific file path issues.
+
+---
+
+## 5. Updating a Dependency to a New Release
+
+To update an existing dependency (e.g. `ggml`, `kokoro.cpp`, `qwen3-asr.cpp`) to a new upstream release:
+1. Navigate to the dependency's local repository folder inside `deps/` (e.g. `deps/ggml/`).
+2. Fetch and checkout the target branch, tag, or commit hash:
+   ```bash
+   git fetch origin
+   git checkout <new-release-commit-or-tag>
+   ```
+3. Test compile the dependency locally using the CMake files. If portability adjustments are needed (e.g. Windows compatibility or include path updates), make them directly inside the repository.
+4. Run the patch generator script in the `deps/` root:
+   ```bash
+   python generate_patches.py
+   ```
+   This will:
+   - Calculate git diffs for modified/added files, ignoring submodules/gitlinks (`--ignore-submodules=all`).
+   - Clean up any obsolete patch files from the registry.
+   - Update `patches/<dependency>/metadata.json` with the new commit hash, branch name, and repository URL.
+5. If the new version added or removed source files (especially for WebRTC), run the dependency build to update the file lists in `deps/CMakeLists.txt` automatically:
+   ```bash
+   python build_deps.py
+   ```
+6. Commit the updated patch registry and metadata files to the main project repository.
+
+---
+
+## 6. Platform Build Agents: Instructions for Building & Patch Syncing
+
+When setting up builds on other target platforms (e.g. macOS, Linux, iOS, or Android):
+1. **Synchronize Dependencies**:
+   Run the download script to automatically clone all repositories, check out the exact commit hashes recorded in `metadata.json`, and apply the centralized patches:
+   ```bash
+   python download_deps.py
+   ```
+2. **Platform Compilation & Fixing Issues**:
+   - If compile issues arise on the new platform, modify the source files directly in the cloned dependency folders (e.g. `deps/espeak-ng/`).
+   - Run `python generate_patches.py` to regenerate the patch registry. Submodule pointers are automatically ignored.
+3. **Build Execution**:
+   - Run the compiler:
+     ```bash
+     python build_deps.py --platform [linux/osx/ios/android]
+     ```
+   - Running a successful build automatically triggers `generate_patches.py` at the end to ensure any local updates are captured.
+4. **Validation and Staging**:
+   - Verify the static library packaging (`libraries/lib/` and `libraries/include/`) contains the necessary targets.
+   - Commit the updated patches, `metadata.json` updates, and CMake imports back to Git.

@@ -119,12 +119,6 @@ index caa85be..1400dde 100644
      Threads::Threads
  )
  
-diff --git a/ggml b/ggml
---- a/ggml
-+++ b/ggml
-@@ -1 +1 @@
--Subproject commit a8db410a252c8c8f2d120c6f2e7133ebe032f35d
-+Subproject commit a8db410a252c8c8f2d120c6f2e7133ebe032f35d-dirty
 diff --git a/src/audio_encoder.cpp b/src/audio_encoder.cpp
 index 682e9fb..1603bb4 100644
 --- a/src/audio_encoder.cpp
@@ -990,9 +984,6 @@ index bbefe7c..a438a38 100644
          model.mmap_addr = nullptr;
          model.mmap_size = 0;
      }
-diff --git a/tests/run_all_tests.sh b/tests/run_all_tests.sh
-old mode 100755
-new mode 100644
 diff --git a/tests/test_injection.cpp b/tests/test_injection.cpp
 index da5c8de..d94cd1a 100644
 --- a/tests/test_injection.cpp

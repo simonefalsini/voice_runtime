@@ -1,7 +1,7 @@
 {
     "repository": "https://github.com/nlohmann/json.git",
     "commit": "9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03",
-    "branch": "develop",
-    "timestamp": "2026-05-28T21:00:00.000000",
+    "branch": "HEAD",
+    "timestamp": "2026-05-30T14:29:31.201979",
     "modified_files": []
 }

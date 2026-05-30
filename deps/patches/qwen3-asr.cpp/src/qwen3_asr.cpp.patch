@@ -44,3 +44,4 @@ index c1321e3..c9075db 100644
 +    
      int64_t t_end = get_time_ms();
      fprintf(stderr, "Model loaded in %lld ms\n", (long long)(t_end - t_start));
+     
