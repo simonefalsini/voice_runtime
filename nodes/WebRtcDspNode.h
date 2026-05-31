@@ -64,7 +64,7 @@ struct WebRtcDspConfig {
 
   // Stima iniziale della latenza render->capture. Alcune versioni APM espongono
   // set_stream_delay_ms(), altre gestiscono internamente il delay estimator.
-  int estimatedRenderDelayMs = 40;
+  int estimatedRenderDelayMs = 80;
 
   // Pool locale per i frame clean prodotti dal nodo.
   std::size_t outputPoolSize = 256;
@@ -185,8 +185,17 @@ protected:
         AudioFrameHandle mic;
 
         bool isRest = takeRenderQueue(refFrame);
-        const bool ttsActive =
-            (ttsState_ && ttsState_->isActive()) || isRest;
+
+        if (!isRest) {
+          // register the time from the first restFrame and the First audio
+          // Frame
+          ttsActiveTimestampNs_ = static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  std::chrono::steady_clock::now().time_since_epoch())
+                  .count());
+        }
+
+        const bool ttsActive = (ttsState_ && ttsState_->isActive()) || isRest;
         // Detect transition: TTS starts playing
         if (ttsActive) {
 
@@ -225,10 +234,12 @@ protected:
                       static_cast<unsigned>(cfg_.format.frameMs)) +
                       4,
                   cfg_.format.frameMs);
-            }
+              ttsActiveTimestampNs_ = 0;
+
 #if VOICE_RUNTIME_ENABLE_WEBRTC_APM
-            apm_->set_stream_delay_ms(cfg_.estimatedRenderDelayMs);
+              apm_->set_stream_delay_ms(cfg_.estimatedRenderDelayMs);
 #endif
+            }
           }
           wasTtsActive_ = ttsActive;
 
@@ -250,7 +261,7 @@ protected:
 
         // Always call drainRenderQueue() to keep render and capture in sync
         if (refFrame)
-            processRenderFrame(*refFrame);
+          processRenderFrame(*refFrame);
 
         if (!warmupComplete_) {
 
@@ -556,6 +567,7 @@ private:
                     float confidence) {
     if (!evq_)
       return;
+
     VadEvent ev;
     ev.type = type;
     ev.timestampNs = timestampNs;

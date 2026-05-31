@@ -252,12 +252,12 @@ int main(int argc, char *argv[]) {
   WebRtcDspConfig dspCfg;
   dspCfg.format = micFormat;
   dspCfg.enableEchoCancellation = true;
-  dspCfg.enableNoiseSuppression = false;
+  dspCfg.enableNoiseSuppression = true;
   dspCfg.enableHighPassFilter = true;
   dspCfg.enableAgc2 = false;
   dspCfg.enableVad = true;         // Integrated VAD
   dspCfg.gateOutputWithVad = true; // Gate output during silence
-  dspCfg.vadMode = 1;              // Less aggressive than default 2
+  dspCfg.vadMode = 2;              // Less aggressive than default 2
   dspCfg.vadHangoverMs = 500; // Longer hangover to prevent segment splitting
   dspCfg.estimatedRenderDelayMs = 50; // Match 50ms buffer + hardware offset
 
