@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
 project(voice_runtime LANGUAGES C CXX)
 
+if(CMAKE_GENERATOR STREQUAL "Xcode")
+    set(CMAKE_CONFIGURATION_TYPES "Debug" CACHE STRING "Force Debug configurations only for Xcode" FORCE)
+    set(VOICE_RUNTIME_ENABLE_WEBRTC_APM ON CACHE BOOL "Build WebRTC APM DSP node" FORCE)
+    message(STATUS "Xcode Generator: Forcing Debug configuration and enabling WebRTC APM")
+endif()
+
 if(WIN32)
     add_compile_definitions(_WIN32_WINNT=0x0A00 NOMINMAX _USE_MATH_DEFINES)
 endif()
@@ -495,3 +501,49 @@ message(STATUS "  nlohmann/json:     ${JSON_INCLUDE_DIR}/nlohmann/json.hpp")
 message(STATUS "  Build tests:       ${VOICE_RUNTIME_BUILD_TESTS}")
 message(STATUS "===================================")
 message(STATUS "")
+
+# ===========================================================================
+# Full DS4 pipeline: Mic → WebRtcDSP(AEC+VAD) → STT → DS4Gate → LLM →
+#                    Interpreter → TTS → Speaker
+# Needs: miniaudio, espeak_stub, Ggml, Qwen3Asr, Kokoro, EspeakNg, httplib+json
+# ===========================================================================
+
+add_executable(test_full_pipeline_ds4
+    tests/test_full_pipeline_ds4.cpp
+    $<TARGET_OBJECTS:miniaudio_impl>
+    $<TARGET_OBJECTS:espeak_stub>
+)
+target_include_directories(test_full_pipeline_ds4 PRIVATE ${VOICE_RUNTIME_INCLUDES})
+target_link_libraries(test_full_pipeline_ds4 PRIVATE
+    ${MINIAUDIO_PLATFORM_LIBS}
+    ${PLATFORM_THREAD_LIBS}
+)
+
+if(TARGET Ggml::Ggml)
+    target_link_libraries(test_full_pipeline_ds4 PRIVATE Ggml::Ggml)
+    if(APPLE)
+        target_link_libraries(test_full_pipeline_ds4 PRIVATE ${APPLE_GGML_FRAMEWORKS})
+    endif()
+endif()
+
+if(TARGET Qwen3Asr::Qwen3Asr)
+    target_link_libraries(test_full_pipeline_ds4 PRIVATE Qwen3Asr::Qwen3Asr)
+endif()
+
+if(TARGET Kokoro::Kokoro)
+    target_link_libraries(test_full_pipeline_ds4 PRIVATE Kokoro::Kokoro)
+    copy_onnxruntime_dlls(test_full_pipeline_ds4)
+endif()
+
+if(TARGET EspeakNg::EspeakNg)
+    target_link_libraries(test_full_pipeline_ds4 PRIVATE EspeakNg::EspeakNg)
+endif()
+
+if(VOICE_RUNTIME_ENABLE_WEBRTC_APM AND TARGET WebRtcAudioProcessing::WebRtcAudioProcessing)
+    target_link_libraries(test_full_pipeline_ds4 PRIVATE
+        WebRtcAudioProcessing::WebRtcAudioProcessing)
+endif()
+
+if(WIN32 AND VOICE_RUNTIME_ENABLE_WASAPI)
+    target_link_libraries(test_full_pipeline_ds4 PRIVATE ${WASAPI_SYSTEM_LIBS})
+endif()
