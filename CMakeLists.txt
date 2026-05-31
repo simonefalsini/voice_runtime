@@ -11,6 +11,12 @@ if(WIN32)
     add_compile_definitions(_WIN32_WINNT=0x0A00 NOMINMAX _USE_MATH_DEFINES)
 endif()
 
+if(APPLE)
+    set(CMAKE_MACOSX_RPATH ON)
+    list(APPEND CMAKE_BUILD_RPATH "@loader_path")
+    list(APPEND CMAKE_INSTALL_RPATH "@loader_path")
+endif()
+
 # Default build type to Release — our Find modules set per-config
 # IMPORTED_LOCATION_RELEASE so a build type must be set for resolution.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -28,7 +34,7 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# ONNX Runtime DLL copy helper (Windows only)
+# ONNX Runtime library copy helper (Windows & macOS)
 # ---------------------------------------------------------------------------
 function(copy_onnxruntime_dlls target_name)
     if(WIN32 AND TARGET Kokoro::onnxruntime)
@@ -45,6 +51,18 @@ function(copy_onnxruntime_dlls target_name)
                 )
             endif()
         endforeach()
+    elseif(APPLE AND TARGET Kokoro::onnxruntime)
+        set(ONNX_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libraries/onnx/osx")
+        add_custom_command(TARGET ${target_name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}>"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNX_LIB_DIR}/$<IF:$<CONFIG:Debug>,Debug,Release>/lib/libonnxruntime.dylib"
+                "$<TARGET_FILE_DIR:${target_name}>/libonnxruntime.dylib"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNX_LIB_DIR}/$<IF:$<CONFIG:Debug>,Debug,Release>/lib/libonnxruntime.dylib"
+                "$<TARGET_FILE_DIR:${target_name}>/libonnxruntime.1.24.1.dylib"
+            COMMENT "Copying ONNX Runtime dylibs to $<TARGET_FILE_DIR:${target_name}>"
+        )
     endif()
 endfunction()
 
