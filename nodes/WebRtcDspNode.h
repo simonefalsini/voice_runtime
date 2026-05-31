@@ -184,8 +184,9 @@ protected:
         AudioFrameHandle refFrame;
         AudioFrameHandle mic;
 
+        bool isRest = takeRenderQueue(refFrame);
         const bool ttsActive =
-            (ttsState_ && ttsState_->isActive()) || takeRenderQueue(refFrame);
+            (ttsState_ && ttsState_->isActive()) || isRest;
         // Detect transition: TTS starts playing
         if (ttsActive) {
 
