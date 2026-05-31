@@ -212,8 +212,22 @@ protected:
 
 #if VOICE_RUNTIME_HTTP_LLM_AVAILABLE
             if (!stubMode_) {
-                handleRealRequest(input);
-                continue;
+                if (handleRealRequest(input)) {
+                    continue;
+                }
+                if (!cfg_.allowStubFallback) {
+                    // No fallback: push empty final chunk to prevent hanging
+                    if (out_) {
+                        TextChunk fin;
+                        fin.text        = "";
+                        fin.isFinal     = true;
+                        fin.sequence    = ++outSeq_;
+                        fin.timestampNs = nowNs();
+                        out_->push(std::move(fin));
+                    }
+                    continue;
+                }
+                logErr("Real request failed — falling back to stub response");
             }
 #endif
             // Stub / simulation fallback
@@ -417,7 +431,7 @@ private:
         return headers;
     }
 
-    void handleRealRequest(const TextChunk& input) {
+    bool handleRealRequest(const TextChunk& input) {
         addUserMessage(input.text);
 
         const json body    = buildRequestBody();
@@ -436,12 +450,12 @@ private:
                     if (intSig_ && intSig_->check()) {
                         intSig_->clear();
                         logErr("interrupted during retry backoff");
-                        return;
+                        return false;
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds(
                         std::min(50, delayMs - elapsed)));
                 }
-                if (!running()) return;
+                if (!running()) return false;
 
                 // Recreate client in case the connection was dropped
                 client_ = makeClient();
@@ -463,7 +477,7 @@ private:
             if (intSig_ && intSig_->check()) {
                 intSig_->clear();
                 logErr("interrupted after failed attempt");
-                return;
+                return false;
             }
         }
 
@@ -478,6 +492,7 @@ private:
                 }
             }
         }
+        return success;
     }
 
     // ── Streaming SSE request ───────────────────────────────────────────────
@@ -490,6 +505,7 @@ private:
     bool doStreamingRequest(const std::string& bodyStr,
                             const httplib::Headers& headers) {
         std::string fullResponse;
+        std::string lineBuffer;
         bool interrupted = false;
         bool receivedDone = false;
 
@@ -500,12 +516,81 @@ private:
             return true;
         }
 
-        // Perform the POST request
-        auto result = client_->Post(
-            cfg_.apiPath,
-            headers,
-            bodyStr,
-            "application/json");
+        // Prepare request
+        httplib::Request req;
+        req.method = "POST";
+        req.path = cfg_.apiPath;
+        req.headers = headers;
+        req.body = bodyStr;
+
+        req.content_receiver = [&](const char *data, size_t data_len, uint64_t /*offset*/, uint64_t /*total*/) -> bool {
+            lineBuffer.append(data, data_len);
+
+            // Extract lines
+            std::size_t pos = 0;
+            while (true) {
+                auto nlPos = lineBuffer.find('\n', pos);
+                if (nlPos == std::string::npos) {
+                    break;
+                }
+
+                std::string line = lineBuffer.substr(pos, nlPos - pos);
+                pos = nlPos + 1;
+
+                // Strip trailing \r
+                if (!line.empty() && line.back() == '\r') {
+                    line.pop_back();
+                }
+
+                // Skip empty lines
+                if (line.empty()) continue;
+
+                // Process "data: " lines
+                if (line.rfind("data: ", 0) != 0) continue;
+
+                std::string payload = line.substr(6);
+
+                // End of stream
+                if (payload == "[DONE]") {
+                    receivedDone = true;
+                    TextChunk fin;
+                    fin.text        = "";
+                    fin.isFinal     = true;
+                    fin.sequence    = ++outSeq_;
+                    fin.timestampNs = nowNs();
+                    if (out_) out_->push(std::move(fin));
+                    continue;
+                }
+
+                // Parse JSON chunk
+                try {
+                    auto j = json::parse(payload);
+                    processStreamChunk(j, fullResponse);
+                } catch (const std::exception& e) {
+                    // Ignore parse/type errors of incomplete or malformed JSON
+                }
+            }
+
+            if (pos > 0) {
+                lineBuffer.erase(0, pos);
+            }
+
+            // Check interrupt mid-parse
+            if (intSig_ && intSig_->check()) {
+                intSig_->clear();
+                interrupted = true;
+                logErr("streaming: interrupted during parse");
+                return false; // stop receiving
+            }
+            if (!running()) {
+                return false; // stop receiving
+            }
+
+            return true; // continue receiving
+        };
+
+        // Perform the POST request using send()
+        auto result = client_->send(req);
 
         // Check for interrupt after request
         if (intSig_ && intSig_->check()) {
@@ -527,68 +612,21 @@ private:
         if (result->status != 200) {
             logErr("streaming: HTTP %d — %.200s",
                    result->status, result->body.c_str());
-            return result->status < 500;
+            return false;
         }
 
-        // Parse SSE body line-by-line
-        const std::string& body = result->body;
-        std::string::size_type pos = 0;
-        while (pos < body.size()) {
-            auto nlPos = body.find('\n', pos);
-            std::string line;
-            if (nlPos == std::string::npos) {
-                line = body.substr(pos);
-                pos = body.size();
-            } else {
-                line = body.substr(pos, nlPos - pos);
-                pos = nlPos + 1;
+        // Handle remaining partial line if connection closed without [DONE]
+        if (!lineBuffer.empty()) {
+            std::string line = lineBuffer;
+            if (line.rfind("data: ", 0) == 0) {
+                std::string payload = line.substr(6);
+                if (payload != "[DONE]") {
+                    try {
+                        auto j = json::parse(payload);
+                        processStreamChunk(j, fullResponse);
+                    } catch (...) {}
+                }
             }
-
-            // Strip trailing \r
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-
-            // Skip empty lines
-            if (line.empty()) continue;
-
-            // Process "data: " lines
-            if (line.rfind("data: ", 0) != 0) continue;
-
-            std::string payload = line.substr(6);
-
-            // End of stream
-            if (payload == "[DONE]") {
-                receivedDone = true;
-                TextChunk fin;
-                fin.text        = "";
-                fin.isFinal     = true;
-                fin.sequence    = ++outSeq_;
-                fin.timestampNs = nowNs();
-                if (out_) out_->push(std::move(fin));
-                continue;
-            }
-
-            // Parse JSON chunk
-            try {
-                auto j = json::parse(payload);
-                processStreamChunk(j, fullResponse);
-            } catch (const json::parse_error& e) {
-                logErr("streaming: JSON parse error: %s (payload: %.120s)",
-                       e.what(), payload.c_str());
-            }
-
-            // Check interrupt mid-parse
-            if (intSig_ && intSig_->check()) {
-                intSig_->clear();
-                interrupted = true;
-                logErr("streaming: interrupted during parse");
-                break;
-            }
-        }
-
-        if (interrupted) {
-            return true;
         }
 
         // If we didn't receive [DONE] but the connection closed cleanly,
@@ -615,13 +653,13 @@ private:
         // Standard OpenAI SSE format:
         //   {"choices":[{"delta":{"content":"token"}}]}
 
-        if (!j.contains("choices") || !j["choices"].is_array() ||
+        if (!j.is_object() || !j.contains("choices") || !j["choices"].is_array() ||
             j["choices"].empty()) {
             return;
         }
 
         const auto& choice = j["choices"][0];
-        if (!choice.contains("delta") || !choice["delta"].is_object()) {
+        if (!choice.is_object() || !choice.contains("delta") || !choice["delta"].is_object()) {
             return;
         }
 
@@ -656,23 +694,25 @@ private:
             if (out_) out_->push(std::move(chunk));
         }
 
-        // Reasoning / thinking content (some providers)
-        if (delta.contains("reasoning_content") &&
-            delta["reasoning_content"].is_string()) {
-            const std::string reasoning =
-                delta["reasoning_content"].get<std::string>();
-            if (!reasoning.empty()) {
-                // Pass through <think> tags for downstream InterpreterNode
-                const std::string tagged = "<think>" + reasoning + "</think>";
-                fullResponse += tagged;
+        // Reasoning / thinking content (some providers, e.g. OpenAI/DeepSeek uses reasoning_content, Ollama uses reasoning)
+        std::string reasoning;
+        if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string()) {
+            reasoning = delta["reasoning_content"].get<std::string>();
+        } else if (delta.contains("reasoning") && delta["reasoning"].is_string()) {
+            reasoning = delta["reasoning"].get<std::string>();
+        }
 
-                TextChunk chunk;
-                chunk.text        = tagged;
-                chunk.isFinal     = false;
-                chunk.sequence    = ++outSeq_;
-                chunk.timestampNs = nowNs();
-                if (out_) out_->push(std::move(chunk));
-            }
+        if (!reasoning.empty()) {
+            // Pass through <think> tags for downstream InterpreterNode
+            const std::string tagged = "<think>" + reasoning + "</think>";
+            fullResponse += tagged;
+
+            TextChunk chunk;
+            chunk.text        = tagged;
+            chunk.isFinal     = false;
+            chunk.sequence    = ++outSeq_;
+            chunk.timestampNs = nowNs();
+            if (out_) out_->push(std::move(chunk));
         }
     }
 
@@ -691,7 +731,7 @@ private:
         if (result->status != 200) {
             logErr("blocking: HTTP %d — %.200s",
                    result->status, result->body.c_str());
-            return result->status < 500;
+            return false;
         }
 
         try {

@@ -32,12 +32,14 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "voice_runtime/Interfaces.h"
 #include "TextProcessing.h"
+#include "LanguageDetector.h"
 
 namespace voice_runtime {
 
@@ -76,6 +78,13 @@ struct InterpreterConfig {
 
 class ThinkTagFilter {
 public:
+    enum class PrintState {
+        None,
+        Think,
+        Tool,
+        Response
+    };
+
     // -- Configuration -------------------------------------------------------
 
     void setFilterThinkTags(bool v) { filterThink_ = v; }
@@ -91,6 +100,7 @@ public:
     void reset() {
         inThink_     = false;
         inToolCalls_ = false;
+        printState_  = PrintState::None;
         pending_.clear();
     }
 
@@ -128,6 +138,12 @@ public:
                 if (hasPrefix(cur, rem, kThinkOpen)) {
                     inThink_ = true;
                     i += kThinkOpen.size();
+                    if (printState_ != PrintState::None) {
+                        std::printf("]\033[0m");
+                    }
+                    printState_ = PrintState::Think;
+                    std::printf("\033[90m[think: ");
+                    std::fflush(stdout);
                     continue;
                 }
             }
@@ -137,6 +153,9 @@ public:
                 if (hasPrefix(cur, rem, kThinkClose)) {
                     inThink_ = false;
                     i += kThinkClose.size();
+                    std::printf("]\033[0m");
+                    printState_ = PrintState::None;
+                    std::fflush(stdout);
                     continue;
                 }
             }
@@ -146,6 +165,12 @@ public:
                 if (hasPrefix(cur, rem, kDsmlToolOpen)) {
                     inToolCalls_ = true;
                     i += kDsmlToolOpen.size();
+                    if (printState_ != PrintState::None) {
+                        std::printf("]\033[0m");
+                    }
+                    printState_ = PrintState::Tool;
+                    std::printf("\033[33m[tool: ");
+                    std::fflush(stdout);
                     continue;
                 }
             }
@@ -155,6 +180,9 @@ public:
                 if (hasPrefix(cur, rem, kDsmlToolClose)) {
                     inToolCalls_ = false;
                     i += kDsmlToolClose.size();
+                    std::printf("]\033[0m");
+                    printState_ = PrintState::None;
+                    std::fflush(stdout);
                     continue;
                 }
             }
@@ -164,6 +192,12 @@ public:
                 if (hasPrefix(cur, rem, kToolCallsOpen)) {
                     inToolCalls_ = true;
                     i += kToolCallsOpen.size();
+                    if (printState_ != PrintState::None) {
+                        std::printf("]\033[0m");
+                    }
+                    printState_ = PrintState::Tool;
+                    std::printf("\033[33m[tool: ");
+                    std::fflush(stdout);
                     continue;
                 }
             }
@@ -173,6 +207,9 @@ public:
                 if (hasPrefix(cur, rem, kToolCallsClose)) {
                     inToolCalls_ = false;
                     i += kToolCallsClose.size();
+                    std::printf("]\033[0m");
+                    printState_ = PrintState::None;
+                    std::fflush(stdout);
                     continue;
                 }
             }
@@ -200,10 +237,40 @@ public:
             // ----- Emit character -------------------------------------------
             // Only emit if we are NOT inside a suppressed block.
 
-            if (!inThink_ && !inToolCalls_) {
+            if (inThink_) {
+                if (printState_ != PrintState::Think) {
+                    if (printState_ != PrintState::None) std::printf("]\033[0m");
+                    printState_ = PrintState::Think;
+                    std::printf("\033[90m[think: ");
+                }
+                std::printf("%c", buf[i]);
+            } else if (inToolCalls_) {
+                if (printState_ != PrintState::Tool) {
+                    if (printState_ != PrintState::None) std::printf("]\033[0m");
+                    printState_ = PrintState::Tool;
+                    std::printf("\033[33m[tool: ");
+                }
+                std::printf("%c", buf[i]);
+            } else {
+                if (printState_ != PrintState::Response) {
+                    if (printState_ != PrintState::None) std::printf("]\033[0m");
+                    printState_ = PrintState::Response;
+                    std::printf("\033[36m[risposta: ");
+                }
+                std::printf("%c", buf[i]);
                 output.push_back(buf[i]);
             }
+            std::fflush(stdout);
             ++i;
+        }
+
+        if (isFinal) {
+            if (printState_ != PrintState::None) {
+                std::printf("]\033[0m");
+                printState_ = PrintState::None;
+            }
+            std::printf("\n");
+            std::fflush(stdout);
         }
 
         return output;
@@ -242,6 +309,7 @@ private:
     bool inToolCalls_ = false;
     bool filterThink_ = true;
     bool filterTools_ = true;
+    PrintState printState_ = PrintState::None;
 
     // Pending buffer: holds bytes that might be the start of a tag but
     // we don't have enough data yet to confirm.  Flushed on isFinal.
@@ -331,7 +399,10 @@ public:
 
     /// Reset the filter state machine.  Call between conversation turns if
     /// the LLM guarantees that tags don't span across turns.
-    void resetFilterState() { filter_.reset(); }
+    void resetFilterState() {
+        filter_.reset();
+        sentenceBuffer_.clear();
+    }
 
 protected:
     void runLoop() override {
@@ -340,29 +411,13 @@ protected:
             if (!in_ || !in_->pop(chunk)) break;
 
             // ----- Step 1: Skip [TOOL_CALL] prefixed chunks -----------------
-            // Some LLMs emit tool calls as plain-text lines prefixed with
-            // "[TOOL_CALL]".  These are never meant for TTS.
             if (config_.filterToolCalls && isToolCallLine(chunk.text)) {
-                // If this is a final chunk, we still need to flush the filter
-                // and forward a final marker so downstream knows the turn ended.
                 if (chunk.isFinal) {
                     std::string flushed = filter_.process("", /*isFinal=*/true);
-                    if (!flushed.empty() && out_) {
-                        out_->push(TextChunk{
-                            .text        = std::move(flushed),
-                            .isFinal     = true,
-                            .sequence    = outputSeq_++,
-                            .timestampNs = chunk.timestampNs
-                        });
-                    } else if (out_) {
-                        // Forward an empty final chunk so TTS knows the turn ended
-                        out_->push(TextChunk{
-                            .text        = "",
-                            .isFinal     = true,
-                            .sequence    = outputSeq_++,
-                            .timestampNs = chunk.timestampNs
-                        });
+                    if (!flushed.empty()) {
+                        sentenceBuffer_ += flushed;
                     }
+                    flushRemainingSentences(chunk.timestampNs, /*forceFinal=*/true);
                 }
                 continue;
             }
@@ -375,24 +430,94 @@ protected:
                 filtered = text_processing::latex_to_speech(filtered);
             }
 
-            // ----- Step 4: Forward non-empty result to TTS ------------------
-            // Always forward the final chunk even if empty, so TTS can detect
-            // end-of-turn.  For non-final chunks, only forward if there's
-            // actual text to speak.
-            if (!filtered.empty() || chunk.isFinal) {
-                if (out_) {
-                    out_->push(TextChunk{
-                        .text        = std::move(filtered),
-                        .isFinal     = chunk.isFinal,
-                        .sequence    = outputSeq_++,
-                        .timestampNs = chunk.timestampNs
-                    });
-                }
+            if (!filtered.empty()) {
+                sentenceBuffer_ += filtered;
+            }
+
+            // ----- Step 4: Handle final chunk (split and flush all) ----------
+            if (chunk.isFinal) {
+                flushRemainingSentences(chunk.timestampNs, true);
+                filter_.reset();
             }
         }
     }
 
 private:
+    void flushRemainingSentences(uint64_t timestampNs, bool forceFinal) {
+        // We buffer the entire response and split it into sentences only at the end.
+        // This ensures TTS receives complete sentences with punctuation and never starves.
+        
+        std::vector<std::string> sentences;
+        std::string current;
+        
+        for (std::size_t i = 0; i < sentenceBuffer_.size(); ++i) {
+            char c = sentenceBuffer_[i];
+            current.push_back(c);
+            if (c == '.' || c == '?' || c == '!' || c == '\n') {
+                auto first = current.find_first_not_of(" \t\r\n");
+                if (first != std::string::npos) {
+                    auto last = current.find_last_not_of(" \t\r\n");
+                    std::string trimmed = current.substr(first, (last - first + 1));
+                    if (!trimmed.empty()) {
+                        sentences.push_back(std::move(trimmed));
+                    }
+                }
+                current.clear();
+            }
+        }
+        
+        if (!current.empty()) {
+            auto first = current.find_first_not_of(" \t\r\n");
+            if (first != std::string::npos) {
+                auto last = current.find_last_not_of(" \t\r\n");
+                std::string trimmed = current.substr(first, (last - first + 1));
+                if (!trimmed.empty()) {
+                    // Append punctuation if missing
+                    char lastChar = trimmed.back();
+                    if (lastChar != '.' && lastChar != '?' && lastChar != '!') {
+                        trimmed += ".";
+                    }
+                    sentences.push_back(std::move(trimmed));
+                }
+            }
+        }
+        
+        sentenceBuffer_.clear();
+
+        if (sentences.empty()) {
+            // Push an empty final chunk so downstream knows it's over
+            if (out_ && forceFinal) {
+                out_->push(TextChunk{
+                    .text        = "",
+                    .isFinal     = true,
+                    .sequence    = outputSeq_++,
+                    .timestampNs = timestampNs
+                });
+            }
+            return;
+        }
+
+        std::size_t seq = 1;
+        for (const auto& sentence : sentences) {
+            std::string lang = config_.preferredLanguage;
+            if (config_.detectLanguage) {
+                lang = detector_.detect(sentence, config_.preferredLanguage);
+            }
+            std::string prefixed = "[lang=" + lang + "] " + sentence;
+
+            if (out_) {
+                out_->push(TextChunk{
+                    .text        = std::move(prefixed),
+                    .isFinal     = (forceFinal && seq == sentences.size()),
+                    .sequence    = outputSeq_++,
+                    .timestampNs = timestampNs
+                });
+            }
+            seq++;
+        }
+    }
+
+
     // -- [TOOL_CALL] detection -----------------------------------------------
     // Checks if a chunk starts with "[TOOL_CALL]" (case-sensitive).
     // This is a simple prefix check — the entire chunk is discarded.
@@ -408,6 +533,8 @@ private:
     TextQueue*        in_        = nullptr;
     TextQueue*        out_       = nullptr;
     uint64_t          outputSeq_ = 0;
+    std::string       sentenceBuffer_;
+    LanguageDetector  detector_;
 };
 
 } // namespace voice_runtime

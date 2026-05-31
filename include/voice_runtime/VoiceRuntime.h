@@ -50,8 +50,8 @@ public:
         , micRawQueue_  (cfg_.micRawQueueCapacity,       cfg_.audioOverflowPolicy, "micRaw")
         , micQueue_     (cfg_.micQueueCapacity,          cfg_.audioOverflowPolicy, "micAdapted")
         , vadGatedQueue_(cfg_.vadGatedQueueCapacity,     cfg_.audioOverflowPolicy, "vadOut")
-        , ttsRefQueue_  (16, QueueOverflowPolicy::BlockProducer, "ttsRef")
-        , speakerQueue_ (16, QueueOverflowPolicy::BlockProducer, "speaker")
+        , ttsRefQueue_  (cfg_.ttsReferenceQueueCapacity, QueueOverflowPolicy::BlockProducer, "ttsRef")
+        , speakerQueue_ (cfg_.speakerQueueCapacity,      QueueOverflowPolicy::BlockProducer, "speaker")
         , cleanQueue_   (cfg_.cleanAudioQueueCapacity,   cfg_.audioOverflowPolicy, "cleanAudio")
         , sttAdaptedQueue_(cfg_.sttAdaptedQueueCapacity, cfg_.audioOverflowPolicy, "sttAdapted")
         // --- code testo ed eventi ---
