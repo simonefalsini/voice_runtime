@@ -1,0 +1,9 @@
+{
+    "repository": "https://github.com/antirez/qwen-asr.git",
+    "commit": "b00b789b17051aea61e9717458171100662318a4",
+    "branch": "main",
+    "timestamp": "2026-05-31T20:15:44.771292",
+    "modified_files": [
+        "CMakeLists.txt"
+    ]
+}

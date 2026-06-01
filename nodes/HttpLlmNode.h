@@ -508,6 +508,8 @@ private:
         std::string lineBuffer;
         bool interrupted = false;
         bool receivedDone = false;
+        int responseStatus = 200;
+        std::string errorBody;
 
         // Check for interrupt before request
         if (intSig_ && intSig_->check()) {
@@ -523,7 +525,16 @@ private:
         req.headers = headers;
         req.body = bodyStr;
 
+        req.response_handler = [&](const httplib::Response &response) -> bool {
+            responseStatus = response.status;
+            return true;
+        };
+
         req.content_receiver = [&](const char *data, size_t data_len, uint64_t /*offset*/, uint64_t /*total*/) -> bool {
+            if (responseStatus != 200) {
+                errorBody.append(data, data_len);
+                return true;
+            }
             lineBuffer.append(data, data_len);
 
             // Extract lines
@@ -610,8 +621,8 @@ private:
         }
 
         if (result->status != 200) {
-            logErr("streaming: HTTP %d — %.200s",
-                   result->status, result->body.c_str());
+            logErr("streaming: HTTP %d — %s",
+                   result->status, errorBody.c_str());
             return false;
         }
 

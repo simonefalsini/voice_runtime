@@ -71,6 +71,8 @@ public:
 
   // Quando il TTS è attivo, il VAD opera in pass-through (no gating)
   virtual void setTtsStateSignal(const TtsStateSignal *signal) { (void)signal; }
+  // Quando il ECS è attivo, il VAD opera in pass-through (no gating)
+  virtual void setACRStateSignal(const TtsStateSignal *signal) { (void)signal; }
 };
 
 // ---------------------------------------------------------------------------
@@ -92,7 +94,7 @@ public:
   // Quando il TTS è attivo, l'AEC processa; quando inattivo, pass-through
   virtual void setTtsStateSignal(const TtsStateSignal *signal) { (void)signal; }
   // Quando il AEC è attivo, il VAD esterno deve essere inattivo, pass-through
-  virtual void setAECStateSignal(TtsStateSignal *signal) { (void)signal; }
+  virtual void setACRStateSignal(TtsStateSignal *signal) { (void)signal; }
 };
 
 // ---------------------------------------------------------------------------
@@ -103,6 +105,7 @@ class ISpeechToTextNode : public virtual IActiveNode {
 public:
   virtual void setInputQueue(AudioFrameQueue *cleanAudioIn) = 0;
   virtual void setOutputQueue(TextQueue *textOut) = 0;
+  virtual void setInterruptSignal(InterruptSignal *signal) { (void)signal; }
 };
 
 // ---------------------------------------------------------------------------

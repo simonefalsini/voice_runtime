@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index caa85be..1400dde 100644
+index caa85be..6f62c9d 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -22,8 +22,53 @@ endif()
+@@ -22,8 +22,59 @@ endif()
  find_package(Threads REQUIRED)
  
  # GGML library paths
@@ -27,6 +27,12 @@ index caa85be..1400dde 100644
 +find_library(GGML_VULKAN_LIB ggml-vulkan HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
 +
 +set(GGML_LIBS ${GGML_LIB} ${GGML_BASE_LIB} ${GGML_CPU_LIB})
++if(GGML_BLAS_LIB)
++    list(APPEND GGML_LIBS ${GGML_BLAS_LIB})
++endif()
++if(APPLE)
++    list(APPEND GGML_LIBS "-framework Accelerate")
++endif()
 +if(GGML_CUDA_LIB)
 +    list(APPEND GGML_LIBS ${GGML_CUDA_LIB})
 +    message(STATUS "Found GGML CUDA library: ${GGML_CUDA_LIB}")
@@ -58,7 +64,7 @@ index caa85be..1400dde 100644
  
  # Mel spectrogram library
  add_library(mel_spectrogram STATIC
-@@ -52,13 +97,8 @@ target_include_directories(audio_encoder PUBLIC
+@@ -52,13 +103,8 @@ target_include_directories(audio_encoder PUBLIC
      ${CMAKE_CURRENT_SOURCE_DIR}/src
      ${GGML_DIR}/include
  )
@@ -73,7 +79,7 @@ index caa85be..1400dde 100644
      Threads::Threads
  )
  
-@@ -70,13 +110,8 @@ target_include_directories(text_decoder PUBLIC
+@@ -70,13 +116,8 @@ target_include_directories(text_decoder PUBLIC
      ${CMAKE_CURRENT_SOURCE_DIR}/src
      ${GGML_DIR}/include
  )
@@ -88,7 +94,7 @@ index caa85be..1400dde 100644
      Threads::Threads
  )
  
-@@ -112,14 +147,9 @@ target_include_directories(forced_aligner PUBLIC
+@@ -112,14 +153,9 @@ target_include_directories(forced_aligner PUBLIC
      ${CMAKE_CURRENT_SOURCE_DIR}/src
      ${GGML_DIR}/include
  )
@@ -104,7 +110,7 @@ index caa85be..1400dde 100644
      Threads::Threads
  )
  
-@@ -183,13 +213,8 @@ add_executable(test_embedding
+@@ -183,13 +219,8 @@ add_executable(test_embedding
  target_include_directories(test_embedding PRIVATE
      ${GGML_DIR}/include
  )

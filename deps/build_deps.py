@@ -4,6 +4,13 @@ import argparse
 import subprocess
 import shutil
 
+# Add common CMake search paths to PATH on macOS
+if sys.platform.startswith('darwin'):
+    extra_paths = ["/Applications/CMake.app/Contents/bin", "/opt/homebrew/bin", "/usr/local/bin"]
+    for p in extra_paths:
+        if os.path.exists(p) and p not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = p + os.pathsep + os.environ.get("PATH", "")
+
 def run_cmd(cmd, cwd=None):
     print(f"Executing: {' '.join(cmd)}")
     subprocess.run(cmd, cwd=cwd, check=True)
@@ -155,6 +162,35 @@ def copy_qwen3_headers(deps_dir, dist_dir):
                 shutil.copy2(os.path.join(src_dir, file), os.path.join(dest_dir, file))
     print(f"qwen3-asr.cpp Headers exported to {dest_dir}")
 
+def copy_qwen3_tts_headers(deps_dir, dist_dir):
+    print("--- Exporting qwen3-tts.cpp Headers ---")
+    src_dir = os.path.join(deps_dir, "qwen3-tts.cpp", "src")
+    dest_dir = os.path.join(dist_dir, "include", "qwen3-tts")
+    if os.path.exists(dest_dir):
+        shutil.rmtree(dest_dir)
+    os.makedirs(dest_dir, exist_ok=True)
+    if os.path.exists(src_dir):
+        for file in os.listdir(src_dir):
+            if file.endswith('.h') or file.endswith('.hpp'):
+                shutil.copy2(os.path.join(src_dir, file), os.path.join(dest_dir, file))
+    root_header = os.path.join(deps_dir, "qwen3-tts.cpp", "qwen3_tts.h")
+    if os.path.exists(root_header):
+        shutil.copy2(root_header, os.path.join(dest_dir, "qwen3_tts.h"))
+    print(f"qwen3-tts.cpp Headers exported to {dest_dir}")
+
+def copy_qwen_asr_headers(deps_dir, dist_dir):
+    print("--- Exporting qwen-asr Headers ---")
+    src_dir = os.path.join(deps_dir, "qwen-asr")
+    dest_dir = os.path.join(dist_dir, "include", "qwen-asr")
+    if os.path.exists(dest_dir):
+        shutil.rmtree(dest_dir)
+    os.makedirs(dest_dir, exist_ok=True)
+    if os.path.exists(src_dir):
+        for file in os.listdir(src_dir):
+            if file.endswith('.h') or file.endswith('.hpp'):
+                shutil.copy2(os.path.join(src_dir, file), os.path.join(dest_dir, file))
+    print(f"qwen-asr Headers exported to {dest_dir}")
+
 def copy_cpp_httplib_headers(deps_dir, dist_dir):
     print("--- Exporting cpp-httplib Headers ---")
     src_file = os.path.join(deps_dir, "cpp-httplib", "httplib.h")
@@ -295,6 +331,83 @@ def build_dependency_qwen3(deps_dir, dist_dir, platform, config, cmake_args, gen
         "qwen3_asr", "mel_spectrogram", "audio_encoder", 
         "text_decoder", "audio_injection", "forced_aligner"
     ])
+
+def build_dependency_qwen3_tts(deps_dir, dist_dir, platform, config, cmake_args, generator=None, arch=None, abi=None):
+    print(f"--- Building qwen3-tts.cpp for {platform} ({config}" + (f", {abi}" if abi else "") + ") ---")
+    src_dir = os.path.join(deps_dir, "qwen3-tts.cpp")
+    ggml_src = os.path.join(deps_dir, "ggml").replace('\\', '/')
+    suffix = f"_{platform}"
+    if abi:
+        suffix += f"_{abi}"
+    suffix += f"_{config.lower()}"
+    build_dir = os.path.join(deps_dir, f"build_qwen3_tts{suffix}")
+    
+    if os.path.exists(build_dir):
+        shutil.rmtree(build_dir, ignore_errors=True)
+    os.makedirs(build_dir, exist_ok=True)
+    
+    ggml_args = get_ggml_cmake_args(dist_dir, platform, config, abi)
+    cmd_configure = [
+        "cmake",
+        "-S", src_dir,
+        "-B", build_dir,
+        f"-DCMAKE_BUILD_TYPE={config}",
+        f"-DGGML_DIR={ggml_src}",
+        "-DQWEN3_TTS_TIMING=OFF"
+    ] + ggml_args
+
+    if platform in ["osx", "ios"]:
+        cmd_configure += ["-DQWEN3_TTS_COREML=ON"]
+    else:
+        cmd_configure += ["-DQWEN3_TTS_COREML=OFF"]
+        
+    if generator:
+        cmd_configure += ["-G", generator]
+    if arch:
+        cmd_configure += ["-A", arch]
+    if cmake_args:
+        cmd_configure += cmake_args
+        
+    run_cmd(cmd_configure)
+    run_cmd(["cmake", "--build", build_dir, "--config", config, "--parallel"])
+    
+    dest_dir = os.path.join(dist_dir, "lib", "qwen3-tts", platform, abi if abi else "", config)
+    copy_static_libs(build_dir, dest_dir, [
+        "text_tokenizer", "tts_transformer", "audio_tokenizer_encoder", 
+        "audio_tokenizer_decoder", "qwen3_tts"
+    ])
+
+def build_dependency_qwen_asr(deps_dir, dist_dir, platform, config, cmake_args, generator=None, arch=None, abi=None):
+    print(f"--- Building qwen-asr for {platform} ({config}" + (f", {abi}" if abi else "") + ") ---")
+    src_dir = os.path.join(deps_dir, "qwen-asr")
+    suffix = f"_{platform}"
+    if abi:
+        suffix += f"_{abi}"
+    suffix += f"_{config.lower()}"
+    build_dir = os.path.join(deps_dir, f"build_qwen_asr{suffix}")
+    
+    if os.path.exists(build_dir):
+        shutil.rmtree(build_dir, ignore_errors=True)
+    os.makedirs(build_dir, exist_ok=True)
+    
+    cmd_configure = [
+        "cmake",
+        "-S", src_dir,
+        "-B", build_dir,
+        f"-DCMAKE_BUILD_TYPE={config}",
+    ]
+    if generator:
+        cmd_configure += ["-G", generator]
+    if arch:
+        cmd_configure += ["-A", arch]
+    if cmake_args:
+        cmd_configure += cmake_args
+        
+    run_cmd(cmd_configure)
+    run_cmd(["cmake", "--build", build_dir, "--config", config, "--parallel"])
+    
+    dest_dir = os.path.join(dist_dir, "lib", "qwen-asr", platform, abi if abi else "", config)
+    copy_static_libs(build_dir, dest_dir, ["qwen_asr"])
 
 def copy_ggml_libs(build_dir, dest_dir, config=None):
     os.makedirs(dest_dir, exist_ok=True)
@@ -458,6 +571,18 @@ def build_windows(deps_dir, dist_dir):
             generator="Visual Studio 17 2022",
             arch="x64"
         )
+        build_dependency_qwen3_tts(
+            deps_dir, dist_dir, "windows", config,
+            cmake_args=[],
+            generator="Visual Studio 17 2022",
+            arch="x64"
+        )
+        build_dependency_qwen_asr(
+            deps_dir, dist_dir, "windows", config,
+            cmake_args=[],
+            generator="Visual Studio 17 2022",
+            arch="x64"
+        )
 
 def build_linux(deps_dir, dist_dir):
     print("--- Building WebRTC APM for Linux ---")
@@ -547,6 +672,14 @@ def build_linux(deps_dir, dist_dir):
             deps_dir, dist_dir, "linux", config,
             cmake_args=[]
         )
+        build_dependency_qwen3_tts(
+            deps_dir, dist_dir, "linux", config,
+            cmake_args=[]
+        )
+        build_dependency_qwen_asr(
+            deps_dir, dist_dir, "linux", config,
+            cmake_args=[]
+        )
 
 def build_osx(deps_dir, dist_dir):
     print("--- Building WebRTC APM for OSX ---")
@@ -633,6 +766,14 @@ def build_osx(deps_dir, dist_dir):
             cmake_args=[]
         )
         build_dependency_qwen3(
+            deps_dir, dist_dir, "osx", config,
+            cmake_args=[]
+        )
+        build_dependency_qwen3_tts(
+            deps_dir, dist_dir, "osx", config,
+            cmake_args=[]
+        )
+        build_dependency_qwen_asr(
             deps_dir, dist_dir, "osx", config,
             cmake_args=[]
         )
@@ -737,6 +878,16 @@ def build_ios(deps_dir, dist_dir):
             generator="Xcode"
         )
         build_dependency_qwen3(
+            deps_dir, dist_dir, "ios", config,
+            cmake_args=ios_cmake_args,
+            generator="Xcode"
+        )
+        build_dependency_qwen3_tts(
+            deps_dir, dist_dir, "ios", config,
+            cmake_args=ios_cmake_args,
+            generator="Xcode"
+        )
+        build_dependency_qwen_asr(
             deps_dir, dist_dir, "ios", config,
             cmake_args=ios_cmake_args,
             generator="Xcode"
@@ -875,6 +1026,18 @@ def build_android(deps_dir, dist_dir, ndk_path=None):
                 abi=abi
             )
             build_dependency_qwen3(
+                deps_dir, dist_dir, "android", config,
+                cmake_args=cmake_args,
+                generator=generator,
+                abi=abi
+            )
+            build_dependency_qwen3_tts(
+                deps_dir, dist_dir, "android", config,
+                cmake_args=cmake_args,
+                generator=generator,
+                abi=abi
+            )
+            build_dependency_qwen_asr(
                 deps_dir, dist_dir, "android", config,
                 cmake_args=cmake_args,
                 generator=generator,
@@ -1301,6 +1464,7 @@ if(NOT TARGET Qwen3Asr::Qwen3Asr)
     add_library(Qwen3Asr::Qwen3Asr INTERFACE IMPORTED GLOBAL)
     set_target_properties(Qwen3Asr::Qwen3Asr PROPERTIES
         INTERFACE_INCLUDE_DIRECTORIES "${QWEN3_INCLUDE_DIR}"
+        INTERFACE_COMPILE_DEFINITIONS "VOICE_RUNTIME_HAS_QWEN3_ASR=1"
     )
 
     # Qwen3Asr requires Ggml
@@ -1338,6 +1502,153 @@ if(NOT TARGET Qwen3Asr::Qwen3Asr)
             # Link main target to all components and also GGML
             set_property(TARGET Qwen3Asr::Qwen3Asr APPEND PROPERTY
                 INTERFACE_LINK_LIBRARIES "$<$<CONFIG:${config}>:${QWEN3_LIBS};Ggml::Ggml>"
+            )
+        endif()
+    endforeach()
+endif()
+"""
+
+    find_qwen3_tts = """# FindQwen3Tts.cmake
+# Defines target: Qwen3Tts::Qwen3Tts and Qwen3Tts::<component> (qwen3_tts, text_tokenizer, tts_transformer, audio_tokenizer_encoder, audio_tokenizer_decoder)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(PLATFORM_DIR "windows")
+    set(LIB_SUFFIX ".lib")
+    set(LIB_PREFIX "")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(PLATFORM_DIR "android/${ANDROID_ABI}")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(PLATFORM_DIR "ios")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(PLATFORM_DIR "osx")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+else()
+    set(PLATFORM_DIR "linux")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+endif()
+
+set(QWEN3_TTS_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include/qwen3-tts")
+
+if(NOT TARGET Qwen3Tts::Qwen3Tts)
+    add_library(Qwen3Tts::Qwen3Tts INTERFACE IMPORTED GLOBAL)
+    set_target_properties(Qwen3Tts::Qwen3Tts PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${QWEN3_TTS_INCLUDE_DIR}"
+        INTERFACE_COMPILE_DEFINITIONS "VOICE_RUNTIME_HAS_QWEN3_TTS=1"
+    )
+
+    # Qwen3Tts requires Ggml
+    if(NOT TARGET Ggml::Ggml)
+        find_package(Ggml REQUIRED)
+    endif()
+
+    foreach(config IN ITEMS DEBUG RELEASE)
+        string(TOLOWER ${config} config_lower)
+        if(config_lower STREQUAL "debug")
+            set(cfg_dir "Debug")
+        else()
+            set(cfg_dir "Release")
+        endif()
+        
+        set(base_dir "${CMAKE_CURRENT_LIST_DIR}/../lib/qwen3-tts/${PLATFORM_DIR}/${cfg_dir}")
+        if(EXISTS "${base_dir}")
+            set_property(TARGET Qwen3Tts::Qwen3Tts APPEND PROPERTY IMPORTED_CONFIGURATIONS ${config})
+            
+            set(libs "qwen3_tts" "text_tokenizer" "tts_transformer" "audio_tokenizer_encoder" "audio_tokenizer_decoder")
+            set(QWEN3_LIBS "")
+            foreach(lib IN LISTS libs)
+                set(lib_path "${base_dir}/${LIB_PREFIX}${lib}${LIB_SUFFIX}")
+                if(EXISTS "${lib_path}")
+                    if(NOT TARGET Qwen3Tts::${lib})
+                        add_library(Qwen3Tts::${lib} STATIC IMPORTED GLOBAL)
+                    endif()
+                    set_target_properties(Qwen3Tts::${lib} PROPERTIES
+                        IMPORTED_LOCATION_${config} "${lib_path}"
+                    )
+                    list(APPEND QWEN3_LIBS Qwen3Tts::${lib})
+                endif()
+            endforeach()
+            
+            set(EXTRA_PLATFORM_LIBS "")
+            if(APPLE)
+                list(APPEND EXTRA_PLATFORM_LIBS "-framework Foundation" "-framework CoreML")
+            endif()
+
+            # Link main target to all components and also GGML
+            set_property(TARGET Qwen3Tts::Qwen3Tts APPEND PROPERTY
+                INTERFACE_LINK_LIBRARIES "$<$<CONFIG:${config}>:${QWEN3_LIBS};Ggml::Ggml;${EXTRA_PLATFORM_LIBS}>"
+            )
+        endif()
+    endforeach()
+endif()
+"""
+
+    find_qwen_asr = """# FindQwenAsr.cmake
+# Defines target: QwenAsr::QwenAsr
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(PLATFORM_DIR "windows")
+    set(LIB_SUFFIX ".lib")
+    set(LIB_PREFIX "")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(PLATFORM_DIR "android/${ANDROID_ABI}")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(PLATFORM_DIR "ios")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(PLATFORM_DIR "osx")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+else()
+    set(PLATFORM_DIR "linux")
+    set(LIB_SUFFIX ".a")
+    set(LIB_PREFIX "lib")
+endif()
+
+set(QWEN_ASR_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../include/qwen-asr")
+
+if(NOT TARGET QwenAsr::QwenAsr)
+    add_library(QwenAsr::QwenAsr STATIC IMPORTED GLOBAL)
+    set_target_properties(QwenAsr::QwenAsr PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${QWEN_ASR_INCLUDE_DIR}"
+        INTERFACE_COMPILE_DEFINITIONS "VOICE_RUNTIME_HAS_QWEN_ASR=1"
+    )
+
+    if(APPLE)
+        set_property(TARGET QwenAsr::QwenAsr APPEND PROPERTY
+            INTERFACE_LINK_LIBRARIES "-framework Accelerate"
+        )
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Try to find OpenBLAS so we can link it
+        find_library(OPENBLAS_LIB NAMES openblas)
+        if(OPENBLAS_LIB)
+            set_property(TARGET QwenAsr::QwenAsr APPEND PROPERTY
+                INTERFACE_LINK_LIBRARIES "${OPENBLAS_LIB}"
+            )
+        endif()
+    endif()
+
+    foreach(config IN ITEMS DEBUG RELEASE)
+        string(TOLOWER ${config} config_lower)
+        if(config_lower STREQUAL "debug")
+            set(cfg_dir "Debug")
+        else()
+            set(cfg_dir "Release")
+        endif()
+        
+        set(lib_path "${CMAKE_CURRENT_LIST_DIR}/../lib/qwen-asr/${PLATFORM_DIR}/${cfg_dir}/${LIB_PREFIX}qwen_asr${LIB_SUFFIX}")
+        if(EXISTS "${lib_path}")
+            set_property(TARGET QwenAsr::QwenAsr APPEND PROPERTY IMPORTED_CONFIGURATIONS ${config})
+            set_target_properties(QwenAsr::QwenAsr PROPERTIES
+                IMPORTED_LOCATION_${config} "${lib_path}"
             )
         endif()
     endforeach()
@@ -1467,6 +1778,10 @@ endif()
         f.write(find_kokoro)
     with open(os.path.join(cmake_dir, "FindQwen3Asr.cmake"), "w", encoding="utf-8") as f:
         f.write(find_qwen3)
+    with open(os.path.join(cmake_dir, "FindQwen3Tts.cmake"), "w", encoding="utf-8") as f:
+        f.write(find_qwen3_tts)
+    with open(os.path.join(cmake_dir, "FindQwenAsr.cmake"), "w", encoding="utf-8") as f:
+        f.write(find_qwen_asr)
     with open(os.path.join(cmake_dir, "FindOpenSSL.cmake"), "w", encoding="utf-8") as f:
         f.write(find_openssl)
     with open(os.path.join(cmake_dir, "FindCppHttplib.cmake"), "w", encoding="utf-8") as f:
@@ -1759,6 +2074,8 @@ def main():
     copy_espeak_headers(deps_dir, dist_dir)
     copy_kokoro_headers(deps_dir, dist_dir)
     copy_qwen3_headers(deps_dir, dist_dir)
+    copy_qwen3_tts_headers(deps_dir, dist_dir)
+    copy_qwen_asr_headers(deps_dir, dist_dir)
     copy_cpp_httplib_headers(deps_dir, dist_dir)
     copy_nlohmann_json_headers(deps_dir, dist_dir)
     

@@ -47,3 +47,5 @@ models*/
 # Temporary / Log files / Test outputs
 *.log
 *.wav
+scratch/
+original_*

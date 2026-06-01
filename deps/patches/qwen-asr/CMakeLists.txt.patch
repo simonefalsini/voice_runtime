@@ -1,0 +1,82 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+new file mode 100644
+index 0000000..4ae990a
+--- /dev/null
++++ b/CMakeLists.txt
+@@ -0,0 +1,76 @@
++cmake_minimum_required(VERSION 3.15)
++project(qwen_asr LANGUAGES C)
++
++set(CMAKE_C_STANDARD 11)
++set(CMAKE_C_STANDARD_REQUIRED ON)
++
++set(SOURCES
++    qwen_asr.c
++    qwen_asr_kernels.c
++    qwen_asr_kernels_generic.c
++    qwen_asr_kernels_neon.c
++    qwen_asr_kernels_avx.c
++    qwen_asr_audio.c
++    qwen_asr_encoder.c
++    qwen_asr_decoder.c
++    qwen_asr_tokenizer.c
++    qwen_asr_safetensors.c
++)
++
++add_library(qwen_asr STATIC ${SOURCES})
++
++target_include_directories(qwen_asr PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
++
++# Optimization flags
++if(MSVC)
++    target_compile_options(qwen_asr PRIVATE /W4 /O2)
++else()
++    target_compile_options(qwen_asr PRIVATE -Wall -Wextra -O3 -ffast-math)
++endif()
++
++# Platform-specific optimization / architecture flags for x86_64
++if(CMAKE_SYSTEM_PROCESSOR MATCHES "amd64|AMD64|x86_64|x86|i386|i686")
++    if(NOT MSVC)
++        target_compile_options(qwen_asr PRIVATE -mavx2 -mfma)
++    endif()
++endif()
++
++# BLAS configurations
++option(USE_BLAS "Use BLAS library for matrix multiplications" ON)
++
++if(USE_BLAS)
++    if(APPLE)
++        target_compile_definitions(qwen_asr PUBLIC USE_BLAS ACCELERATE_NEW_LAPACK)
++        target_link_libraries(qwen_asr PUBLIC "-framework Accelerate")
++    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Android")
++        find_package(PkgConfig QUIET)
++        if(PKG_CONFIG_FOUND)
++            pkg_check_modules(OPENBLAS QUIET openblas)
++        endif()
++        
++        if(OPENBLAS_FOUND)
++            target_compile_definitions(qwen_asr PUBLIC USE_BLAS USE_OPENBLAS)
++            target_include_directories(qwen_asr PUBLIC ${OPENBLAS_INCLUDE_DIRS})
++            target_link_libraries(qwen_asr PUBLIC ${OPENBLAS_LIBRARIES})
++        else()
++            find_library(OPENBLAS_LIB NAMES openblas)
++            find_path(OPENBLAS_INC NAMES cblas.h PATH_SUFFIXES openblas)
++            if(OPENBLAS_LIB)
++                target_compile_definitions(qwen_asr PUBLIC USE_BLAS USE_OPENBLAS)
++                if(OPENBLAS_INC)
++                    target_include_directories(qwen_asr PUBLIC ${OPENBLAS_INC})
++                endif()
++                target_link_libraries(qwen_asr PUBLIC ${OPENBLAS_LIB})
++            else()
++                # Fallback search using standard find BLAS
++                find_package(BLAS)
++                if(BLAS_FOUND)
++                    target_compile_definitions(qwen_asr PUBLIC USE_BLAS)
++                    target_link_libraries(qwen_asr PUBLIC ${BLAS_LIBRARIES})
++                else()
++                    message(WARNING "BLAS requested but not found. Falling back to generic CPU loops.")
++                endif()
++            endif()
++        endif()
++    endif()
++endif()

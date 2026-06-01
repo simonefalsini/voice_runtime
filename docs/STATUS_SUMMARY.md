@@ -51,6 +51,39 @@ Supporto CMake: opzione `VOICE_RUNTIME_ENABLE_WASAPI` (default OFF).
 
 ## 2. Test e Validazione
 
+## Follow-up: Qwen3-TTS Performance Optimization & Voice Consistency
+
+### 1. Fix Greedy Decoding Repetition Loops & Temperature Settings
+- **Problem**: Changing the default temperature to `0.0f` (greedy decoding) caused the autoregressive generation loop to get trapped in infinite repetition loops for longer sentences. The model failed to generate the `codec_eos_id` (End of Sequence) and generated garbage tokens until it hit the hard limit (`max_audio_tokens = 4096`), inflating synthesis time to **322.5 seconds** (5.4 minutes) for a 197-character sentence.
+- **Solution**: Set the default temperature in [Qwen3TtsNode.h](file:///Users/simone/voice_runtime/nodes/Qwen3TtsNode.h) to `0.5f`. This breaks the repetition loop, letting the model successfully generate the End-of-Sequence token and finish quickly, while preserving high speech quality.
+
+### 2. Automatic Voice Consistency Fallback
+- **Problem**: When no `--tts-voice` is specified, the model generated speech stochastically, which led to voice style and gender characteristics changing randomly on every sentence.
+- **Solution**: Implemented a fallback loader inside `Qwen3TtsNode::initialize`. If no explicit voice path is passed, the node searches for a default voice file in:
+  1. `models/tts/default_voice.wav`
+  2. `deps/qwen3-tts.cpp/examples/readme_clone_input.wav`
+- Under `deps/download_models.py`, we automatically copy the cloned repository's sample reference voice to `models/tts/default_voice.wav` during setup.
+- This ensures that a single, consistent speaker embedding is extracted once at startup and used for the entire session, keeping the voice completely constant.
+
+### 3. Rebuild and Verification
+- Executed compilation and ran the simulation:
+  ```bash
+  /Applications/CMake.app/Contents/bin/cmake --build build -j
+  build/test_aec_transcription tests/data/user_reading.txt tests/data/tts_playback.txt 45 --tts qwen3
+  ```
+- **Results**:
+  - The default reference voice `deps/qwen3-tts.cpp/examples/readme_clone_input.wav` was loaded automatically and successfully:
+    `[Qwen3TTS] Loading reference voice: deps/qwen3-tts.cpp/examples/readme_clone_input.wav`
+    `[Qwen3TTS] Speaker embedding successfully extracted (1024 floats)`
+  - Synthesis timings showed a **25x speedup** on the 197-character sentence, dropping from **322,534 ms** down to **13,041 ms** (~1.1x real-time speed):
+    - Sentence 1 (44 chars): `Total Synth: 3219.8 ms`
+    - Sentence 2 (47 chars): `Total Synth: 2782.2 ms`
+    - Sentence 3 (197 chars): `Total Synth: 13041.9 ms`
+  - The voice remained completely consistent and constant across all playback sentences.
+  - The pipeline shut down cleanly after 45 seconds without deadlocks or resource leaks.
+
+---
+
 I seguenti test sono compilabili in modalità reale (`VOICE_RUNTIME_ENABLE_WEBRTC_APM=ON`) ed eseguibili con successo:
 
 1. **Test AEC Unit**:

@@ -163,7 +163,7 @@ public:
     ttsState_ = signal;
   }
 
-  void setAECStateSignal(TtsStateSignal *signal) override {
+  void setACRStateSignal(TtsStateSignal *signal) override {
     AECState_ = signal;
   }
 

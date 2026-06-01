@@ -1,0 +1,235 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index ea06922..3037c41 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -28,15 +28,41 @@ endif()
+ find_package(Threads REQUIRED)
+ 
+ # GGML library paths
+-set(GGML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ggml")
+-set(GGML_BUILD_DIR "${GGML_DIR}/build")
++if(NOT DEFINED GGML_DIR)
++    set(GGML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ggml")
++endif()
++if(NOT DEFINED GGML_BUILD_DIR)
++    set(GGML_BUILD_DIR "${GGML_DIR}/build")
++endif()
+ 
+-# Detect Metal backend availability
+-if(APPLE AND EXISTS "${GGML_BUILD_DIR}/src/ggml-metal/libggml-metal.dylib")
+-    set(GGML_HAS_METAL ON)
+-    message(STATUS "GGML Metal backend found — GPU acceleration enabled")
+-else()
+-    set(GGML_HAS_METAL OFF)
++# Find GGML libraries robustly
++find_library(GGML_LIB ggml HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_BASE_LIB ggml-base HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_CPU_LIB ggml-cpu HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_CUDA_LIB ggml-cuda HINTS ${GGML_BUILD_DIR}/src/ggml-cuda ${GGML_BUILD_DIR}/src/ggml-cuda/Release ${GGML_BUILD_DIR}/src/ggml-cuda/Debug)
++find_library(GGML_METAL_LIB ggml-metal HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_VULKAN_LIB ggml-vulkan HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++find_library(GGML_BLAS_LIB ggml-blas HINTS ${GGML_BUILD_DIR}/src ${GGML_BUILD_DIR}/src/Release ${GGML_BUILD_DIR}/src/Debug)
++
++set(GGML_LIBS ${GGML_LIB} ${GGML_BASE_LIB} ${GGML_CPU_LIB})
++if(GGML_BLAS_LIB)
++    list(APPEND GGML_LIBS ${GGML_BLAS_LIB})
++endif()
++if(APPLE)
++    list(APPEND GGML_LIBS "-framework Accelerate")
++endif()
++if(GGML_CUDA_LIB)
++    list(APPEND GGML_LIBS ${GGML_CUDA_LIB})
++    find_package(CUDAToolkit REQUIRED)
++    if(CUDAToolkit_FOUND)
++        list(APPEND GGML_LIBS CUDA::cudart CUDA::cublas CUDA::cublasLt CUDA::cuda_driver)
++    endif()
++endif()
++if(GGML_METAL_LIB)
++    list(APPEND GGML_LIBS ${GGML_METAL_LIB})
++    if(APPLE)
++        list(APPEND GGML_LIBS "-framework Metal" "-framework MetalPerformanceShaders" "-framework Foundation" "-framework MetalKit")
++    endif()
+ endif()
+ 
+ # Text tokenizer library
+@@ -53,14 +79,9 @@ target_link_directories(text_tokenizer PUBLIC
+     ${GGML_BUILD_DIR}/src/ggml-metal
+ )
+ target_link_libraries(text_tokenizer PUBLIC
+-    ggml
+-    ggml-base
+-    ggml-cpu
++    ${GGML_LIBS}
+     Threads::Threads
+ )
+-if(GGML_HAS_METAL)
+-    target_link_libraries(text_tokenizer PUBLIC ggml-metal "-framework Metal" "-framework MetalKit")
+-endif()
+ 
+ # TTS Transformer library (GGML-based + optional CoreML bridge)
+ set(TTS_TRANSFORMER_SOURCES
+@@ -86,14 +107,9 @@ target_link_directories(tts_transformer PUBLIC
+     ${GGML_BUILD_DIR}/src/ggml-metal
+ )
+ target_link_libraries(tts_transformer PUBLIC
+-    ggml
+-    ggml-base
+-    ggml-cpu
++    ${GGML_LIBS}
+     Threads::Threads
+ )
+-if(GGML_HAS_METAL)
+-    target_link_libraries(tts_transformer PUBLIC ggml-metal "-framework Metal" "-framework MetalKit")
+-endif()
+ if(APPLE AND QWEN3_TTS_COREML)
+     target_link_libraries(tts_transformer PUBLIC
+         "-framework Foundation"
+@@ -115,14 +131,9 @@ target_link_directories(audio_tokenizer_encoder PUBLIC
+     ${GGML_BUILD_DIR}/src/ggml-metal
+ )
+ target_link_libraries(audio_tokenizer_encoder PUBLIC
+-    ggml
+-    ggml-base
+-    ggml-cpu
++    ${GGML_LIBS}
+     Threads::Threads
+ )
+-if(GGML_HAS_METAL)
+-    target_link_libraries(audio_tokenizer_encoder PUBLIC ggml-metal "-framework Metal" "-framework MetalKit")
+-endif()
+ 
+ # Audio tokenizer decoder library (GGML-based)
+ add_library(audio_tokenizer_decoder STATIC
+@@ -138,14 +149,9 @@ target_link_directories(audio_tokenizer_decoder PUBLIC
+     ${GGML_BUILD_DIR}/src/ggml-metal
+ )
+ target_link_libraries(audio_tokenizer_decoder PUBLIC
+-    ggml
+-    ggml-base
+-    ggml-cpu
++    ${GGML_LIBS}
+     Threads::Threads
+ )
+-if(GGML_HAS_METAL)
+-    target_link_libraries(audio_tokenizer_decoder PUBLIC ggml-metal "-framework Metal" "-framework MetalKit")
+-endif()
+ 
+ # Qwen3 TTS library (full pipeline)
+ add_library(qwen3_tts STATIC
+diff --git a/qwen3_tts.h b/qwen3_tts.h
+index d53f17b..9535381 100644
+--- a/qwen3_tts.h
++++ b/qwen3_tts.h
+@@ -91,10 +91,20 @@ public:
+     // Extract speaker embedding without synthesizing
+     bool extract_speaker_embedding(const std::string & reference_audio, std::vector<float> & embedding);
+ 
+-    // Generate speech using a precomputed speaker embedding
++    // Extract speaker embedding from raw audio samples (for caching)
++    bool extract_speaker_embedding(const float * ref_samples, int32_t n_ref_samples,
++                                   std::vector<float> & embedding,
++                                   const tts_params & params = tts_params());
++
++    // Generate speech using a precomputed speaker embedding vector
+     tts_result synthesize_with_embedding(const std::string & text,
+                                          const std::vector<float> & embedding,
+                                          const tts_params & params = tts_params());
++
++    // Generate speech using a precomputed speaker embedding float pointer
++    tts_result synthesize_with_embedding(const std::string & text,
++                                          const float * embedding, int32_t embedding_size,
++                                          const tts_params & params = tts_params());
+     
+     // Generate speech from text
+     // text: input text to synthesize
+diff --git a/src/qwen3_tts.cpp b/src/qwen3_tts.cpp
+index c2f3434..f0f09ce 100644
+--- a/src/qwen3_tts.cpp
++++ b/src/qwen3_tts.cpp
+@@ -317,6 +317,41 @@ bool Qwen3TTS::extract_speaker_embedding(const float * ref_samples, int32_t n_re
+     return true;
+ }
+ 
++bool Qwen3TTS::extract_speaker_embedding(const std::string & reference_audio, std::vector<float> & embedding) {
++    std::vector<float> ref_samples;
++    int ref_sample_rate;
++    if (!load_audio_file(reference_audio, ref_samples, ref_sample_rate)) {
++        error_msg_ = "Failed to load reference audio: " + reference_audio;
++        return false;
++    }
++    
++    const int target_rate = 24000;
++    if (ref_sample_rate != target_rate) {
++        std::vector<float> resampled;
++        resample_linear(ref_samples.data(), (int)ref_samples.size(), ref_sample_rate, resampled, target_rate);
++        ref_samples = std::move(resampled);
++    }
++
++    if (!encoder_loaded_) {
++        if (tts_model_path_.empty()) {
++            error_msg_ = "Internal error: missing TTS model path for lazy encoder load";
++            return false;
++        }
++        if (!audio_encoder_.load_model(tts_model_path_)) {
++            error_msg_ = "Failed to load speaker encoder: " + audio_encoder_.get_error();
++            return false;
++        }
++        encoder_loaded_ = true;
++    }
++    
++    if (!audio_encoder_.encode(ref_samples.data(), ref_samples.size(), embedding)) {
++        error_msg_ = "Failed to extract speaker embedding: " + audio_encoder_.get_error();
++        return false;
++    }
++    
++    return true;
++}
++
+ tts_result Qwen3TTS::synthesize_with_embedding(const std::string & text,
+                                                 const float * embedding, int32_t embedding_size,
+                                                 const tts_params & params) {
+@@ -335,6 +370,17 @@ tts_result Qwen3TTS::synthesize_with_embedding(const std::string & text,
+     return synthesize_internal(text, embedding, params, result);
+ }
+ 
++tts_result Qwen3TTS::synthesize_with_embedding(const std::string & text,
++                                                const std::vector<float> & embedding,
++                                                const tts_params & params) {
++    tts_result result;
++    if (!models_loaded_) {
++        result.error_msg = "Models not loaded";
++        return result;
++    }
++    return synthesize_internal(text, embedding.data(), params, result);
++}
++
+ tts_result Qwen3TTS::synthesize_internal(const std::string & text,
+                                           const float * speaker_embedding,
+                                           const tts_params & params,
+diff --git a/src/qwen3_tts.h b/src/qwen3_tts.h
+index 623a272..27c6c0c 100644
+--- a/src/qwen3_tts.h
++++ b/src/qwen3_tts.h
+@@ -119,6 +119,10 @@ public:
+                                    std::vector<float> & embedding,
+                                    const tts_params & params = tts_params());
+ 
++    // Extract speaker embedding from a reference audio file (loads and resamples internally)
++    bool extract_speaker_embedding(const std::string & reference_audio,
++                                   std::vector<float> & embedding);
++
+     // Synthesize with pre-computed speaker embedding (skips encoder)
+     // embedding: speaker embedding from extract_speaker_embedding()
+     // embedding_size: must match hidden_size (typically 1024)
+@@ -126,6 +130,11 @@ public:
+                                           const float * embedding, int32_t embedding_size,
+                                           const tts_params & params = tts_params());
+ 
++    // Synthesize with pre-computed speaker embedding vector
++    tts_result synthesize_with_embedding(const std::string & text,
++                                          const std::vector<float> & embedding,
++                                          const tts_params & params = tts_params());
++
+     // Set progress callback
+     void set_progress_callback(tts_progress_callback_t callback);
+     

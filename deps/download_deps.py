@@ -260,12 +260,20 @@ def main():
             "url": "https://github.com/predict-woo/qwen3-asr.cpp"
         },
         {
+            "name": "qwen3-tts.cpp",
+            "url": "https://github.com/predict-woo/qwen3-tts.cpp.git"
+        },
+        {
             "name": "cpp-httplib",
             "url": "https://github.com/yhirose/cpp-httplib.git"
         },
         {
             "name": "json",
             "url": "https://github.com/nlohmann/json.git"
+        },
+        {
+            "name": "qwen-asr",
+            "url": "https://github.com/antirez/qwen-asr.git"
         }
     ]
     

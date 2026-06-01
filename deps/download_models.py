@@ -52,6 +52,82 @@ _MODELS: Dict[str, List[Tuple[str, str, Optional[str], Optional[int]]]] = {
             None,
         ),
     ],
+    "qwen-asr-0.6b": [
+        (
+            "stt/qwen-asr-0.6b/config.json",
+            "https://huggingface.co/Qwen/Qwen3-ASR-0.6B/resolve/main/config.json",
+            None,
+            None,
+        ),
+        (
+            "stt/qwen-asr-0.6b/generation_config.json",
+            "https://huggingface.co/Qwen/Qwen3-ASR-0.6B/resolve/main/generation_config.json",
+            None,
+            None,
+        ),
+        (
+            "stt/qwen-asr-0.6b/vocab.json",
+            "https://huggingface.co/Qwen/Qwen3-ASR-0.6B/resolve/main/vocab.json",
+            None,
+            None,
+        ),
+        (
+            "stt/qwen-asr-0.6b/merges.txt",
+            "https://huggingface.co/Qwen/Qwen3-ASR-0.6B/resolve/main/merges.txt",
+            None,
+            None,
+        ),
+        (
+            "stt/qwen-asr-0.6b/model.safetensors",
+            "https://huggingface.co/Qwen/Qwen3-ASR-0.6B/resolve/main/model.safetensors",
+            None,
+            None,
+        ),
+    ],
+    "qwen-asr-1.7b": [
+        (
+            "stt/qwen-asr-1.7b/config.json",
+            "https://huggingface.co/Qwen/Qwen3-ASR-1.7B/resolve/main/config.json",
+            None,
+            None,
+        ),
+        (
+            "stt/qwen-asr-1.7b/generation_config.json",
+            "https://huggingface.co/Qwen/Qwen3-ASR-1.7B/resolve/main/generation_config.json",
+            None,
+            None,
+        ),
+        (
+            "stt/qwen-asr-1.7b/vocab.json",
+            "https://huggingface.co/Qwen/Qwen3-ASR-1.7B/resolve/main/vocab.json",
+            None,
+            None,
+        ),
+        (
+            "stt/qwen-asr-1.7b/merges.txt",
+            "https://huggingface.co/Qwen/Qwen3-ASR-1.7B/resolve/main/merges.txt",
+            None,
+            None,
+        ),
+        (
+            "stt/qwen-asr-1.7b/model.safetensors.index.json",
+            "https://huggingface.co/Qwen/Qwen3-ASR-1.7B/resolve/main/model.safetensors.index.json",
+            None,
+            None,
+        ),
+        (
+            "stt/qwen-asr-1.7b/model-00001-of-00002.safetensors",
+            "https://huggingface.co/Qwen/Qwen3-ASR-1.7B/resolve/main/model-00001-of-00002.safetensors",
+            None,
+            None,
+        ),
+        (
+            "stt/qwen-asr-1.7b/model-00002-of-00002.safetensors",
+            "https://huggingface.co/Qwen/Qwen3-ASR-1.7B/resolve/main/model-00002-of-00002.safetensors",
+            None,
+            None,
+        ),
+    ],
     "tts": [
         (
             "tts/kokoro-v1.1-zh.onnx",
@@ -98,7 +174,7 @@ _DEPS: Dict[str, List[Tuple[str, str, Optional[str], Optional[int]]]] = {
 }
 
 # Pseudo-targets that don't have downloads but create directories / print info.
-_PSEUDO_TARGETS = {"voices", "espeak-data", "tts-dict"}
+_PSEUDO_TARGETS = {"voices", "espeak-data", "tts-dict", "qwen3-tts"}
 
 # All real download targets (models + deps).
 _ALL_REAL_TARGETS = list(_MODELS.keys()) + list(_DEPS.keys())
@@ -367,6 +443,65 @@ def _handle_tts_dict(output_dir: Path) -> None:
         print("  ✗ Could not find Kokoro dictionary source under deps/kokoro.cpp/dict/.")
 
 
+def _handle_qwen3_tts(output_dir: Path) -> None:
+    print(f"\n{'=' * 60}")
+    print(f"  Target: qwen3-tts")
+    print(f"{'=' * 60}")
+    
+    # Check Python dependencies
+    missing = []
+    dependencies = [
+        ("huggingface_hub", "huggingface_hub"),
+        ("gguf", "gguf"),
+        ("torch", "torch"),
+        ("safetensors", "safetensors"),
+        ("numpy", "numpy"),
+        ("tqdm", "tqdm")
+    ]
+    import importlib.util
+    for name, pip_name in dependencies:
+        if importlib.util.find_spec(name) is None:
+            missing.append(pip_name)
+            
+    if missing:
+        print(f"  Missing python dependencies for Qwen3 TTS: {', '.join(missing)}")
+        print("  Attempting to install them via pip...")
+        try:
+            import subprocess
+            subprocess.run([sys.executable, "-m", "pip", "install"] + missing, check=True)
+            print("  ✓ Python dependencies installed successfully!")
+        except Exception as e:
+            print(f"  ✗ Failed to install python dependencies: {e}")
+            print(f"  Please run: pip install {' '.join(missing)}")
+            return
+
+    deps_dir = _project_root() / "deps"
+    setup_script = deps_dir / "qwen3-tts.cpp" / "scripts" / "setup_pipeline_models.py"
+    if not setup_script.exists():
+        print(f"  ✗ Could not find setup script at: {setup_script}")
+        print("  Please make sure you have run deps/download_deps.py first to clone the repo.")
+        return
+
+    print(f"  Running setup script: {setup_script} ...")
+    try:
+        import subprocess
+        # setup_pipeline_models.py expects --models-dir as an argument to write the converted models into.
+        # Run using python interpreter executable
+        subprocess.run([sys.executable, str(setup_script), "--models-dir", str(output_dir)], check=True)
+        print("  ✓ Qwen3 TTS model download & conversion complete!")
+        
+        # Copy default voice reference file
+        src_voice = deps_dir / "qwen3-tts.cpp" / "examples" / "readme_clone_input.wav"
+        dest_voice = output_dir / "tts" / "default_voice.wav"
+        if src_voice.exists():
+            import shutil
+            dest_voice.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src_voice), str(dest_voice))
+            print(f"  ✓ Copied default voice reference to: {dest_voice}")
+    except Exception as e:
+        print(f"  ✗ Failed to run Qwen3 TTS model setup: {e}")
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -462,6 +597,8 @@ def main() -> int:
         _handle_espeak_data(output_dir)
     if "tts-dict" in targets:
         _handle_tts_dict(output_dir)
+    if "qwen3-tts" in targets:
+        _handle_qwen3_tts(output_dir)
 
     print(f"\n{'=' * 60}")
     if ok:

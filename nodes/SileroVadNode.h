@@ -672,6 +672,9 @@ public:
   void setTtsStateSignal(const TtsStateSignal *signal) override {
     ttsState_ = signal;
   }
+  void setACRStateSignal(const TtsStateSignal *signal) override {
+    ACRState_ = signal;
+  }
 
   // Additional API ---------------------------------------------------------
 
@@ -706,23 +709,26 @@ protected:
 
     while (running()) {
       AudioFrameHandle frame;
-      if (!in_ || !in_->pop(frame))
-        break;
 
       // TTS active → pass-through (no gating, no VAD events)
-      if (ttsState_ && ttsState_->isActive()) {
+      if ((ttsState_ && ttsState_->isActive()) ||
+          (ACRState_ && ACRState_->isActive())) {
         // Flush any partially-accumulated frames so they don't
         // leak into the next VAD batch after TTS deactivates.
-        for (auto &pf : pendingFrames_) {
-          if (out_)
-            out_->push(std::move(pf));
-        }
+        // for (auto &pf : pendingFrames_) {
+        //  if (out_)
+        //    out_->push(std::move(pf));
+        //}
         pendingFrames_.clear();
         accumCount_ = 0;
-        if (out_)
-          out_->push(std::move(frame));
+        // if (out_)
+        //   out_->push(std::move(frame));
+
         continue;
       }
+
+      if (!in_ || !in_->pop(frame))
+        break;
 
       // Accumulate frames for Silero inference
       pendingFrames_.push_back(std::move(frame));
@@ -901,6 +907,7 @@ private:
   AudioFrameQueue *out_ = nullptr;
   VadEventQueue *evq_ = nullptr;
   const TtsStateSignal *ttsState_ = nullptr;
+  const TtsStateSignal *ACRState_ = nullptr;
 
   SharedBufferPool<AudioFrame> pool_; // for potential future use
   bool initialized_ = false;

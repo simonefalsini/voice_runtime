@@ -98,16 +98,24 @@ static std::string drainQueue(TextQueue& q) {
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
 
-static std::string getEnv(const char* name, const char* fallback) {
+static std::string trim(const std::string& str, const std::string& chars = " \t\r\n") {
+    if (str.empty()) return str;
+    std::size_t first = str.find_first_not_of(chars);
+    if (first == std::string::npos) return "";
+    std::size_t last = str.find_last_not_of(chars);
+    return str.substr(first, (last - first + 1));
+}
+
+static std::string getEnv(const char* name, const char* fallback, const std::string& chars = " \t\r\n") {
     const char* v = std::getenv(name);
-    return v ? v : fallback;
+    return v ? trim(v, chars) : fallback;
 }
 
 static HttpLlmConfig makeOllamaConfig() {
     HttpLlmConfig cfg;
-    cfg.baseUrl         = getEnv("LLM_BASE_URL", "http://127.0.0.1:11434");
-    cfg.apiPath         = getEnv("LLM_API_PATH", "/v1/chat/completions");
-    cfg.model           = getEnv("LLM_MODEL",    "qwen2.5:7b");
+    cfg.baseUrl         = getEnv("LLM_BASE_URL", "http://127.0.0.1:11434", " \t\r\n=");
+    cfg.apiPath         = getEnv("LLM_API_PATH", "/v1/chat/completions", " \t\r\n=");
+    cfg.model           = getEnv("LLM_MODEL",    "qwen2.5:7b", " \t\r\n=");
     cfg.apiKey          = getEnv("LLM_API_KEY",  "");
     cfg.systemPrompt    = "You are DS4, a concise voice assistant. "
                           "Always reply in 1-2 sentences.";
@@ -125,7 +133,9 @@ static HttpLlmConfig makeOllamaConfig() {
 static bool shouldForceRealLLM() {
     const char* r = std::getenv("LLM_REAL");
     const char* fr = std::getenv("LLM_FORCE_REAL");
-    return (r && std::string(r) == "1") || (fr && std::string(fr) == "1");
+    std::string rStr = r ? trim(r, " \t\r\n=") : "";
+    std::string frStr = fr ? trim(fr, " \t\r\n=") : "";
+    return rStr == "1" || frStr == "1";
 }
 
 // ─── Test harness ────────────────────────────────────────────────────────────

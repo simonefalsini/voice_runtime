@@ -1,0 +1,12 @@
+{
+    "repository": "https://github.com/predict-woo/qwen3-tts.cpp.git",
+    "commit": "7a762e2ad4bacc6fdda81d81bf10a09ffb546f29",
+    "branch": "main",
+    "timestamp": "2026-05-31T20:15:45.073537",
+    "modified_files": [
+        "qwen3_tts.h",
+        "src/qwen3_tts.cpp",
+        "CMakeLists.txt",
+        "src/qwen3_tts.h"
+    ]
+}

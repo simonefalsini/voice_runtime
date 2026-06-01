@@ -62,7 +62,15 @@ static bool containsKeyword(const std::string& text, const std::vector<std::stri
 
 static std::string getEnv(const char* name, const char* fallback) {
     const char* v = std::getenv(name);
-    return v ? v : fallback;
+    if (!v) return fallback;
+    std::string s = v;
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) {
+        return !std::isspace(ch) && ch != '=';
+    }));
+    s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) {
+        return !std::isspace(ch) && ch != '=';
+    }).base(), s.end());
+    return s;
 }
 
 int main() {

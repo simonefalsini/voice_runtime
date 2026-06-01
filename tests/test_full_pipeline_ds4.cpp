@@ -70,7 +70,9 @@
 #include "WebRtcDspNode.h"
 #include "SileroVadNode.h"
 #include "Qwen3SttNode.h"
+#include "AntirezSttNode.h"
 #include "KokoroTtsNode.h"
+#include "Qwen3TtsNode.h"
 #include "HttpLlmNode.h"
 #include "RealInterpreterNode.h"
 #include "LLMClassifierNode.h"
@@ -95,30 +97,78 @@ static constexpr const char* kRed     = "\033[31m";
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
-static std::string getEnv(const char* name, const char* fallback) {
+static std::string trim(const std::string& str, const std::string& chars = " \t\r\n") {
+    if (str.empty()) return str;
+    std::size_t first = str.find_first_not_of(chars);
+    if (first == std::string::npos) return "";
+    std::size_t last = str.find_last_not_of(chars);
+    return str.substr(first, (last - first + 1));
+}
+
+static std::string getEnv(const char* name, const char* fallback, const std::string& chars = " \t\r\n") {
     const char* v = std::getenv(name);
-    return v ? v : fallback;
+    return v ? trim(v, chars) : fallback;
 }
 
 // ─── main ────────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
-    int durationSec = (argc > 1) ? std::atoi(argv[1]) : 0; // 0 = indefinito
+    // Filtro argomenti opzionali per evitare errori di posizionamento
+    std::vector<std::string> args;
+    std::string ttsType = "kokoro"; // default
+    std::string sttType = "qwen3-asr"; // default
+    std::string ttsVoicePath = ""; // default empty
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--tts" && i + 1 < argc) {
+            ttsType = argv[i + 1];
+            ++i;
+        } else if (std::string(argv[i]) == "--stt" && i + 1 < argc) {
+            sttType = argv[i + 1];
+            ++i;
+        } else if (std::string(argv[i]) == "--tts-voice" && i + 1 < argc) {
+            ttsVoicePath = argv[i + 1];
+            ++i;
+        } else {
+            args.push_back(argv[i]);
+        }
+    }
+    if (const char* ttsEnv = std::getenv("TTS_TYPE")) {
+        ttsType = trim(ttsEnv, " \t\r\n=");
+    }
+    if (const char* sttEnv = std::getenv("STT_TYPE")) {
+        sttType = trim(sttEnv, " \t\r\n=");
+    }
+    if (const char* voiceEnv = std::getenv("TTS_VOICE")) {
+        ttsVoicePath = trim(voiceEnv, " \t\r\n=");
+    }
+
+    int durationSec = (args.size() > 0) ? std::atoi(args[0].c_str()) : 0; // 0 = indefinito
     if (durationSec < 0) durationSec = 0;
 
     // Percorsi modelli
     const std::string vadModelPath = "models/vad/ggml-silero-v6.2.0.bin";
-    const std::string sttModelPath = (argc > 2)
-        ? argv[2]
+    std::string sttModelPath = (sttType == "qwen-asr")
+        ? "models/stt/qwen-asr-0.6b"
         : "models/stt/Qwen3-ASR-0.6B-Q8_0.gguf";
+    if (args.size() > 1) {
+        sttModelPath = args[1];
+    }
+
+    std::string mmprojPath = "";
+    if (sttModelPath.find("1.7B") != std::string::npos) {
+        auto pos = sttModelPath.find_last_of("/\\");
+        std::string dir = (pos == std::string::npos) ? "" : sttModelPath.substr(0, pos + 1);
+        mmprojPath = dir + "mmproj-Qwen3-ASR-1.7B-Q8_0.gguf";
+    }
+
     const std::string ttsModelPath = "models/tts/kokoro-v1.1-zh.onnx";
     const std::string voicesPath   = "models/tts/voices.bin";
     const std::string espeakData   = "models/espeak-ng-data";
 
     // LLM config via env
-    const std::string llmBaseUrl  = getEnv("LLM_BASE_URL", "http://127.0.0.1:11434");
-    const std::string llmApiPath  = getEnv("LLM_API_PATH", "/v1/chat/completions");
-    const std::string llmModel    = getEnv("LLM_MODEL",    "qwen3.6:35b");
+    const std::string llmBaseUrl  = getEnv("LLM_BASE_URL", "http://127.0.0.1:11434", " \t\r\n=");
+    const std::string llmApiPath  = getEnv("LLM_API_PATH", "/v1/chat/completions", " \t\r\n=");
+    const std::string llmModel    = getEnv("LLM_MODEL",    "qwen3.6:35b", " \t\r\n=");
     const std::string llmApiKey   = getEnv("LLM_API_KEY",  "");
 
     // ── Header ───────────────────────────────────────────────────────────────
@@ -132,8 +182,13 @@ int main(int argc, char* argv[]) {
     std::printf("  LLM:         %s%s%s%s\n",
                 kBold, llmBaseUrl.c_str(), llmApiPath.c_str(), kReset);
     std::printf("  Modello:     %s%s%s\n", kYellow, llmModel.c_str(), kReset);
-    std::printf("  STT:         %s\n", sttModelPath.c_str());
-    std::printf("  TTS:         %s\n", ttsModelPath.c_str());
+    std::printf("  STT model:   %s\n", sttModelPath.c_str());
+    std::printf("  STT engine:  %s\n", sttType.c_str());
+    std::printf("  TTS model:   %s\n", ttsModelPath.c_str());
+    std::printf("  TTS engine:  %s\n", ttsType.c_str());
+    if (!ttsVoicePath.empty()) {
+        std::printf("  TTS voice:   %s\n", ttsVoicePath.c_str());
+    }
     std::printf("  Durata:      %s\n\n",
                 durationSec > 0
                     ? (std::to_string(durationSec) + " secondi").c_str()
@@ -198,7 +253,7 @@ int main(int argc, char* argv[]) {
 
     // Override da env
     if (const char* e = std::getenv("VAD_SPEECH_THRESHOLD")) {
-        cfg.vadSpeechThreshold = std::stof(e);
+        cfg.vadSpeechThreshold = std::stof(trim(e, " \t\r\n="));
     }
 
     // ── Configurazione singoli nodi ──────────────────────────────────────────
@@ -223,9 +278,9 @@ int main(int argc, char* argv[]) {
     dspCfg.aecWarmupGracePeriodMs    = cfg.aecWarmupGracePeriodMs;
     dspCfg.allowPassthroughWithoutWebRtc = true;
 
-    if (const char* e = std::getenv("VAD_MODE"))     dspCfg.vadMode     = std::atoi(e);
-    if (const char* e = std::getenv("VAD_HANGOVER")) dspCfg.vadHangoverMs = std::atoi(e);
-    if (const char* e = std::getenv("GATE_WITH_VAD"))dspCfg.gateOutputWithVad = std::atoi(e)!=0;
+    if (const char* e = std::getenv("VAD_MODE"))     dspCfg.vadMode     = std::atoi(trim(e, " \t\r\n=").c_str());
+    if (const char* e = std::getenv("VAD_HANGOVER")) dspCfg.vadHangoverMs = std::atoi(trim(e, " \t\r\n=").c_str());
+    if (const char* e = std::getenv("GATE_WITH_VAD"))dspCfg.gateOutputWithVad = std::atoi(trim(e, " \t\r\n=").c_str())!=0;
     dspCfg.vadSpeechThreshold = cfg.vadSpeechThreshold;
 
     Qwen3SttConfig sttCfg;
@@ -283,11 +338,40 @@ int main(int argc, char* argv[]) {
 
     auto mic      = std::make_unique<MiniaudioMicNode>(micCfg);
     auto dsp      = std::make_unique<WebRtcDspNode>(dspCfg);
-    auto stt      = std::make_unique<Qwen3SttNode>(sttCfg);
+    
+    std::unique_ptr<ISpeechToTextNode> stt;
+    if (sttType == "qwen-asr") {
+        AntirezSttConfig antirezSttCfg;
+        antirezSttCfg.modelPath = sttModelPath;
+        antirezSttCfg.transcriptionTimeoutMs = 600;
+        antirezSttCfg.minSpeechSamples = 16000;
+        antirezSttCfg.maxSpeechSamples = 480000;
+        stt = std::make_unique<AntirezSttNode>(antirezSttCfg);
+    } else {
+        sttCfg.modelPath = sttModelPath;
+        sttCfg.mmprojPath = mmprojPath;
+        stt = std::make_unique<Qwen3SttNode>(sttCfg);
+    }
+    
     auto gate     = std::make_unique<LLMClassifierNode>();
     auto llm      = std::make_unique<HttpLlmNode>(llmCfg);
     auto interp   = std::make_unique<RealInterpreterNode>(interpCfg);
-    auto tts      = std::make_unique<KokoroTtsNode>(ttsCfg);
+    
+    std::unique_ptr<ITextToSpeechNode> tts;
+    if (ttsType == "qwen3" || ttsType == "qwen3-tts") {
+        Qwen3TtsConfig qwenTtsCfg;
+        qwenTtsCfg.modelDir = "models";
+        qwenTtsCfg.voicePath = ttsVoicePath;
+        qwenTtsCfg.speakerFormat = speakerFormat;
+        qwenTtsCfg.aecRefFormat = aecRefFormat;
+        qwenTtsCfg.speakerPoolSize = 512;
+        qwenTtsCfg.aecRefPoolSize = 512;
+        qwenTtsCfg.defaultLanguage = "en";
+        tts = std::make_unique<Qwen3TtsNode>(qwenTtsCfg);
+    } else {
+        tts = std::make_unique<KokoroTtsNode>(ttsCfg);
+    }
+    
     auto audioOut = std::make_unique<MiniaudioOutputNode>(outCfg);
 
     // Salviamo un puntatore raw al gate per tracciare lo stato nel loop
@@ -385,13 +469,14 @@ int main(int argc, char* argv[]) {
         if (sec != lastStatusSec && sec % 10 == 0 && sec > 0) {
             lastStatusSec = sec;
             std::printf("%s  [%ds]%s mic=%llu dsp→stt=%llu text=%llu llmOut=%llu "
-                        "tts=%s interrupts=%d injected=%d cache=\"%s\"\n",
+                        "tts=%s acr=%s interrupts=%d injected=%d cache=\"%s\"\n",
                         kGray, sec, kReset,
                         (unsigned long long)rt.micQueue().stats().produced,
                         (unsigned long long)rt.cleanQueue().stats().produced,
                         (unsigned long long)rt.sttTextQueue().stats().produced,
                         (unsigned long long)rt.llmOutputQueue().stats().produced,
                         rt.ttsState().isActive() ? "ACTIVE" : "idle",
+                        rt.acrState().isActive() ? "ACTIVE" : "idle",
                         gatePtr->interruptCount(),
                         gatePtr->injectedCount(),
                         gatePtr->cachedComment().c_str());

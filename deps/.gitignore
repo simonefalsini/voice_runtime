@@ -5,6 +5,8 @@
 /espeak-ng/
 /kokoro.cpp/
 /qwen3-asr.cpp/
+/qwen3-tts.cpp/
+/qwen-asr/
 /cpp-httplib/
 /json/
 /openssl/

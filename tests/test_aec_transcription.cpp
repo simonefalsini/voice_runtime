@@ -47,21 +47,37 @@
 #include "voice_runtime/SharedBufferPool.h"
 
 #include "KokoroTtsNode.h"
+#include "Qwen3TtsNode.h"
 #include "MiniaudioMicNode.h"
 #include "MiniaudioOutputNode.h"
 #include "Qwen3SttNode.h"
+#include "AntirezSttNode.h"
 #include "SileroVadNode.h"
 #include "WebRtcDspNode.h"
 
 using namespace voice_runtime;
+
+static std::string trim(const std::string& str, const std::string& chars = " \t\r\n") {
+  if (str.empty()) return str;
+  std::size_t first = str.find_first_not_of(chars);
+  if (first == std::string::npos) return "";
+  std::size_t last = str.find_last_not_of(chars);
+  return str.substr(first, (last - first + 1));
+}
 
 // ---------------------------------------------------------------------------
 // Signal handler
 // ---------------------------------------------------------------------------
 
 static std::atomic<bool> g_running{true};
+static InterruptSignal g_ttsInterruptSignal;
+static InterruptSignal g_sttInterruptSignal;
 
-static void sigHandler(int /*sig*/) { g_running.store(false); }
+static void sigHandler(int /*sig*/) {
+  g_running.store(false);
+  g_ttsInterruptSignal.request();
+  g_sttInterruptSignal.request();
+}
 
 // ---------------------------------------------------------------------------
 // ANSI colors
@@ -108,23 +124,56 @@ static std::string loadFile(const std::string &path) {
 // ---------------------------------------------------------------------------
 
 int main(int argc, char *argv[]) {
-  if (argc < 3) {
+  // Filter out optional arguments to avoid offset errors for positional arguments
+  std::vector<std::string> args;
+  std::string ttsType = "kokoro"; // default
+  std::string sttType = "qwen3-asr"; // default
+  std::string ttsVoicePath = ""; // default empty
+  for (int i = 1; i < argc; ++i) {
+    if (std::string(argv[i]) == "--tts" && i + 1 < argc) {
+      ttsType = argv[i + 1];
+      ++i;
+    } else if (std::string(argv[i]) == "--stt" && i + 1 < argc) {
+      sttType = argv[i + 1];
+      ++i;
+    } else if (std::string(argv[i]) == "--tts-voice" && i + 1 < argc) {
+      ttsVoicePath = argv[i + 1];
+      ++i;
+    } else {
+      args.push_back(argv[i]);
+    }
+  }
+  if (const char* ttsEnv = std::getenv("TTS_TYPE")) {
+    ttsType = trim(ttsEnv, " \t\r\n=");
+  }
+  if (const char* sttEnv = std::getenv("STT_TYPE")) {
+    sttType = trim(sttEnv, " \t\r\n=");
+  }
+  if (const char* voiceEnv = std::getenv("TTS_VOICE")) {
+    ttsVoicePath = trim(voiceEnv, " \t\r\n=");
+  }
+
+  if (args.size() < 2) {
     std::fprintf(
         stderr,
         "Usage: %s <user_text_file> <tts_text_file> [duration_sec] "
         "[stt_model_path] [mmproj_path]\n\n"
+        "  Options:\n"
+        "    --tts <kokoro|qwen3>       Select TTS engine (default: kokoro)\n"
+        "    --stt <qwen3-asr|qwen-asr> Select STT engine (default: qwen3-asr)\n"
+        "    --tts-voice <wav_file>     Select reference WAV voice for cloning (Qwen3 only)\n\n"
         "  user_text_file: text for the user to read aloud (shown on screen)\n"
         "  tts_text_file:  text sent to TTS (played through speakers)\n"
         "  duration_sec:   optional, default 60\n"
-        "  stt_model_path: optional, path to STT model\n"
+        "  stt_model_path: optional, path to STT model / directory\n"
         "  mmproj_path:    optional, path to audio encoder mmproj\n",
         argv[0]);
     return 1;
   }
 
-  const std::string userTextPath = argv[1];
-  const std::string ttsTextPath = argv[2];
-  int durationSec = (argc > 3) ? std::atoi(argv[3]) : 60;
+  const std::string userTextPath = args[0];
+  const std::string ttsTextPath = args[1];
+  int durationSec = (args.size() > 2) ? std::atoi(args[2].c_str()) : 60;
   if (durationSec <= 0)
     durationSec = 60;
 
@@ -148,13 +197,13 @@ int main(int argc, char *argv[]) {
 
   // Model paths
   const std::string vadModelPath = "models/vad/ggml-silero-v6.2.0.bin";
-  std::string sttModelPath = "models/stt/Qwen3-ASR-0.6B-Q8_0.gguf";
-  if (argc > 4) {
-    sttModelPath = argv[4];
+  std::string sttModelPath = (sttType == "qwen-asr") ? "models/stt/qwen-asr-0.6b" : "models/stt/Qwen3-ASR-0.6B-Q8_0.gguf";
+  if (args.size() > 3) {
+    sttModelPath = args[3];
   }
   std::string mmprojPath = "";
-  if (argc > 5) {
-    mmprojPath = argv[5];
+  if (args.size() > 4) {
+    mmprojPath = args[4];
   } else {
     if (sttModelPath.find("1.7B") != std::string::npos) {
       auto pos = sttModelPath.find_last_of("/\\");
@@ -189,7 +238,12 @@ int main(int argc, char *argv[]) {
   if (!mmprojPath.empty()) {
     std::printf("  MMProj:      %s\n", mmprojPath.c_str());
   }
+  std::printf("  STT engine:  %s\n", sttType.c_str());
   std::printf("  TTS model:   %s\n", ttsModelPath.c_str());
+  std::printf("  TTS engine:  %s\n", ttsType.c_str());
+  if (!ttsVoicePath.empty()) {
+    std::printf("  TTS voice:   %s\n", ttsVoicePath.c_str());
+  }
   std::printf("\n");
   std::printf("  %sPipeline:%s Mic → WebRtcDSP(AEC+VAD) → STT\n", kBold,
               kReset);
@@ -263,13 +317,13 @@ int main(int argc, char *argv[]) {
 
   // Optional environment variable overrides for debugging VAD
   if (const char *gateEnv = std::getenv("GATE_WITH_VAD")) {
-    dspCfg.gateOutputWithVad = (std::atoi(gateEnv) != 0);
+    dspCfg.gateOutputWithVad = (std::atoi(trim(gateEnv, " \t\r\n=").c_str()) != 0);
   }
   if (const char *modeEnv = std::getenv("VAD_MODE")) {
-    dspCfg.vadMode = std::atoi(modeEnv);
+    dspCfg.vadMode = std::atoi(trim(modeEnv, " \t\r\n=").c_str());
   }
   if (const char *hangoverEnv = std::getenv("VAD_HANGOVER")) {
-    dspCfg.vadHangoverMs = std::atoi(hangoverEnv);
+    dspCfg.vadHangoverMs = std::atoi(trim(hangoverEnv, " \t\r\n=").c_str());
   }
 
   dspCfg.outputPoolSize = 256;
@@ -286,37 +340,62 @@ int main(int argc, char *argv[]) {
   dsp.setVadEventQueue(&vadEventQueue);  // VAD event output
   dsp.setTtsStateSignal(&ttsState);
 
-  // 3. STT (Qwen3)
-  Qwen3SttConfig sttCfg;
-  sttCfg.modelPath = sttModelPath;
-  sttCfg.mmprojPath = mmprojPath;
-  sttCfg.transcriptionTimeoutMs = 600;
-  sttCfg.minSpeechSamples = 16000;
-  sttCfg.maxSpeechSamples = 480000;
-  sttCfg.nThreads = 4;
-  sttCfg.stripLanguagePrefix = true;
-  Qwen3SttNode stt(sttCfg);
-  stt.setInputQueue(&cleanQueue);
-  stt.setOutputQueue(&textQueue);
+  // 3. STT Select (Qwen3 or Antirez)
+  std::unique_ptr<ISpeechToTextNode> stt;
+  if (sttType == "qwen-asr") {
+    AntirezSttConfig antirezSttCfg;
+    antirezSttCfg.modelPath = sttModelPath;
+    antirezSttCfg.transcriptionTimeoutMs = 600;
+    antirezSttCfg.minSpeechSamples = 16000;
+    antirezSttCfg.maxSpeechSamples = 480000;
+    stt = std::make_unique<AntirezSttNode>(antirezSttCfg);
+  } else {
+    Qwen3SttConfig sttCfg;
+    sttCfg.modelPath = sttModelPath;
+    sttCfg.mmprojPath = mmprojPath;
+    sttCfg.transcriptionTimeoutMs = 600;
+    sttCfg.minSpeechSamples = 16000;
+    sttCfg.maxSpeechSamples = 480000;
+    sttCfg.nThreads = 4;
+    sttCfg.stripLanguagePrefix = true;
+    stt = std::make_unique<Qwen3SttNode>(sttCfg);
+  }
+  stt->setInputQueue(&cleanQueue);
+  stt->setOutputQueue(&textQueue);
+  stt->setInterruptSignal(&g_sttInterruptSignal);
 
-  // 5. TTS (Kokoro)
-  KokoroTtsConfig ttsCfg;
-  ttsCfg.modelPath = ttsModelPath;
-  ttsCfg.voicesPath = voicesPath;
-  ttsCfg.dictDir = "models/tts/dict";
-  ttsCfg.vocabPath = "models/tts/dict/vocab.txt";
-  ttsCfg.espeakDataPath = espeakData;
-  ttsCfg.speakerFormat = speakerFormat;
-  ttsCfg.aecRefFormat = aecRefFormat;
-  ttsCfg.speakerPoolSize = 512;
-  ttsCfg.aecRefPoolSize = 512;
-  ttsCfg.defaultVoice = "af_bella";
-  ttsCfg.defaultLanguage = "en";
-  ttsCfg.speed = 1.0f;
-  KokoroTtsNode tts(ttsCfg);
-  tts.setInputQueue(&ttsInputQueue);
-  tts.setSpeakerOutputQueue(&speakerQueue);
-  tts.setAecReferenceOutputQueue(&aecRefQueue);
+  // 5. TTS Engine Selection (Kokoro or Qwen3)
+  std::unique_ptr<ITextToSpeechNode> tts;
+  if (ttsType == "qwen3" || ttsType == "qwen3-tts") {
+    Qwen3TtsConfig ttsCfg;
+    ttsCfg.modelDir = "models";
+    ttsCfg.voicePath = ttsVoicePath;
+    ttsCfg.speakerFormat = speakerFormat;
+    ttsCfg.aecRefFormat = aecRefFormat;
+    ttsCfg.speakerPoolSize = 512;
+    ttsCfg.aecRefPoolSize = 512;
+    ttsCfg.defaultLanguage = "en";
+    tts = std::make_unique<Qwen3TtsNode>(ttsCfg);
+  } else {
+    KokoroTtsConfig ttsCfg;
+    ttsCfg.modelPath = ttsModelPath;
+    ttsCfg.voicesPath = voicesPath;
+    ttsCfg.dictDir = "models/tts/dict";
+    ttsCfg.vocabPath = "models/tts/dict/vocab.txt";
+    ttsCfg.espeakDataPath = espeakData;
+    ttsCfg.speakerFormat = speakerFormat;
+    ttsCfg.aecRefFormat = aecRefFormat;
+    ttsCfg.speakerPoolSize = 512;
+    ttsCfg.aecRefPoolSize = 512;
+    ttsCfg.defaultVoice = "af_bella";
+    ttsCfg.defaultLanguage = "en";
+    ttsCfg.speed = 1.0f;
+    tts = std::make_unique<KokoroTtsNode>(ttsCfg);
+  }
+  tts->setInputQueue(&ttsInputQueue);
+  tts->setSpeakerOutputQueue(&speakerQueue);
+  tts->setAecReferenceOutputQueue(&aecRefQueue);
+  tts->setInterruptSignal(&g_ttsInterruptSignal);
 
   // the TTS no need to comunicate is state
   // only one VAD node webRTC
@@ -363,7 +442,7 @@ int main(int argc, char *argv[]) {
 
   std::printf("%s[Init]%s STT... ", kGray, kReset);
   std::fflush(stdout);
-  if (!stt.initialize()) {
+  if (!stt->initialize()) {
     std::printf("FAIL\n");
     return 1;
   }
@@ -371,7 +450,7 @@ int main(int argc, char *argv[]) {
 
   std::printf("%s[Init]%s TTS... ", kGray, kReset);
   std::fflush(stdout);
-  if (!tts.initialize()) {
+  if (!tts->initialize()) {
     std::printf("FAIL\n");
     return 1;
   }
@@ -421,8 +500,8 @@ int main(int argc, char *argv[]) {
   // -----------------------------------------------------------------------
 
   audioOut.start();
-  tts.start();
-  stt.start();
+  tts->start();
+  stt->start();
   dsp.start();
   mic.start(); // mic last — starts producing immediately
 
@@ -592,13 +671,13 @@ int main(int argc, char *argv[]) {
   cleanQueue.stop();
   aecRefQueue.stop();
   speakerQueue.stop();
-  ttsInputQueue.stop();
+  ttsInputQueue.stopAndClear();
   vadEventQueue.stop();
 
   // Stop nodes (upstream -> downstream)
   mic.stop();
   dsp.stop();
-  stt.stop();
+  stt->stop();
 
   // Drain remaining transcriptions from textQueue (including final shutdown
   // flush)
@@ -610,7 +689,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  tts.stop();
+  tts->stop();
   audioOut.stop();
 
   // Stop and clear textQueue at the very end
